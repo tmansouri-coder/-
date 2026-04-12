@@ -1,0 +1,183 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && 
+        (request.auth.token.email == 't.mansouri@lagh-univ.dz' ||
+         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'));
+    }
+
+    function isViceAdmin() {
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'vice_admin';
+    }
+    
+    function isSpecialtyManager() {
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'specialty_manager';
+    }
+    
+    function isOwner(uid) {
+      return isAuthenticated() && request.auth.uid == uid;
+    }
+
+    // Users collection
+    match /users/{uid} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && (request.auth.uid == uid || isAdmin() || isViceAdmin());
+      allow update: if isAuthenticated() && (request.auth.uid == uid || isAdmin() || isViceAdmin());
+      allow delete: if isAdmin();
+    }
+
+    // Cycles
+    match /cycles/{id} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() || isViceAdmin();
+    }
+
+    // Specialties
+    match /specialties/{id} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() || isViceAdmin();
+    }
+
+    // Levels
+    match /levels/{id} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() || isViceAdmin();
+    }
+
+    // Modules
+    match /modules/{id} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() || isViceAdmin() || isSpecialtyManager();
+    }
+
+    // Schedule Sessions
+    match /scheduleSessions/{id} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() || isViceAdmin() || isSpecialtyManager();
+    }
+
+    // Exam Sessions
+    match /examSessions/{id} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() || isViceAdmin() || isSpecialtyManager();
+    }
+
+    // Session Logs
+    match /sessionLogs/{id} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated() && (resource.data.teacherId == request.auth.uid || isAdmin() || isViceAdmin());
+      allow delete: if isAdmin() || isViceAdmin();
+    }
+
+    // Projects
+    match /projects/{id} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated() && (resource.data.supervisorId == request.auth.uid || isSpecialtyManager() || isAdmin() || isViceAdmin());
+      allow delete: if isAdmin() || isViceAdmin();
+    }
+
+    // Rooms
+    match /rooms/{id} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() || isViceAdmin();
+    }
+
+    // Pedagogical Calendars (both singular and plural)
+    match /pedagogicalCalendar/{id} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() || isViceAdmin();
+    }
+    match /pedagogicalCalendars/{id} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() || isViceAdmin();
+    }
+
+    // Overtime Requests
+    match /overtimeRequests/{id} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAdmin() || isViceAdmin() || (isAuthenticated() && resource.data.teacherId == request.auth.uid);
+      allow delete: if isAdmin() || isViceAdmin() || (isAuthenticated() && resource.data.teacherId == request.auth.uid);
+    }
+
+    // Certificate Requests
+    match /certificateRequests/{id} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAdmin() || isViceAdmin();
+      allow delete: if isAdmin() || isViceAdmin();
+    }
+
+    // Students
+    match /students/{id} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() || isViceAdmin() || isSpecialtyManager();
+    }
+
+    // Settings
+    match /settings/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Department Stats
+    match /departmentStats/{id} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin() || isViceAdmin();
+    }
+
+    // Academic Years
+    match /academicYears/{id} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // Field Visits
+    match /fieldVisits/{id} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated() && (resource.data.teacherId == request.auth.uid || isAdmin() || isViceAdmin() || isSpecialtyManager());
+      allow delete: if isAdmin() || isViceAdmin();
+    }
+
+    // Usernames mapping (for login by username)
+    match /usernames/{username} {
+      allow read: if true;
+      allow write: if isAdmin() || isViceAdmin();
+    }
+
+    // Teacher Reports
+    match /teacherReports/{id} {
+      allow read: if isAuthenticated() && (
+        request.auth.token.email == 't.mansouri@lagh-univ.dz' ||
+        (resource != null && resource.data.teacherId == request.auth.uid) ||
+        isAdmin() || 
+        isViceAdmin()
+      );
+      allow create: if isAuthenticated() && request.resource.data.teacherId == request.auth.uid;
+      allow update: if isAdmin() || isViceAdmin();
+      allow delete: if isAdmin() || isViceAdmin();
+    }
+
+    // Notifications
+    match /notifications/{id} {
+      allow read: if isAuthenticated() && (resource == null || resource.data.userId == request.auth.uid);
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated() && (resource == null || resource.data.userId == request.auth.uid);
+      allow delete: if isAuthenticated() && (resource == null || resource.data.userId == request.auth.uid);
+    }
+  }
+}

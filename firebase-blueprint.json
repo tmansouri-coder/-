@@ -1,0 +1,210 @@
+{
+  "entities": {
+    "users": {
+      "title": "User",
+      "description": "User profile and role information",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "specialty_manager", "teacher"] },
+        "rank": { "type": "string", "enum": ["Pr", "MCA", "MCB", "MAA", "MAB", "Vacataire"] },
+        "employmentType": { "type": "string", "enum": ["internal", "external", "temporary"] },
+        "specialtyId": { "type": "string" },
+        "phoneNumber": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "specialties": {
+      "title": "Specialty",
+      "description": "Academic specialty",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "field": { "type": "string", "enum": ["Engineering", "LMD"] },
+        "managerId": { "type": "string" }
+      },
+      "required": ["id", "name", "field"]
+    },
+    "levels": {
+      "title": "Level",
+      "description": "Academic level (L2, L3, M1, M2, Engineer)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "specialtyId": { "type": "string" },
+        "studentCount": { "type": "number" }
+      },
+      "required": ["id", "name", "specialtyId"]
+    },
+    "modules": {
+      "title": "Module",
+      "description": "Academic module (subject)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "levelId": { "type": "string" },
+        "semester": { "type": "string", "enum": ["S1", "S2"] },
+        "credits": { "type": "number" },
+        "coefficient": { "type": "number" }
+      },
+      "required": ["id", "name", "levelId", "semester"]
+    },
+    "sessions": {
+      "title": "Session",
+      "description": "Class session record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "teacherId": { "type": "string" },
+        "moduleId": { "type": "string" },
+        "roomId": { "type": "string" },
+        "date": { "type": "string", "format": "date" },
+        "startTime": { "type": "string" },
+        "endTime": { "type": "string" },
+        "status": { "type": "string", "enum": ["taught", "absent", "technical_issue"] },
+        "comment": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "teacherId", "moduleId", "date", "status"]
+    },
+    "projects": {
+      "title": "Project",
+      "description": "Graduation project (PFE)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "keywords": { "type": "array", "items": { "type": "string" } },
+        "students": { "type": "array", "items": { "type": "string" } },
+        "supervisorId": { "type": "string" },
+        "specialtyId": { "type": "string" },
+        "levelId": { "type": "string" },
+        "progress": { "type": "number" },
+        "status": { "type": "string", "enum": ["Proposed", "Distributed", "InProgress", "Ready", "Defended"] },
+        "stage": { "type": "string", "enum": ["Start", "References", "Theory", "Practical", "Writing", "Ready"] },
+        "isDecision1275": { "type": "boolean" },
+        "defenseInfo": {
+          "type": "object",
+          "properties": {
+            "proposedDate": { "type": "string" },
+            "proposedTime": { "type": "string" },
+            "confirmedDate": { "type": "string" },
+            "confirmedTime": { "type": "string" },
+            "roomId": { "type": "string" },
+            "presidentId": { "type": "string" },
+            "examinerId": { "type": "string" },
+            "status": { "type": "string", "enum": ["Proposed", "Confirmed", "Completed"] },
+            "thesisUrl": { "type": "string" }
+          }
+        },
+        "problems": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "type": { "type": "string", "enum": ["No Response", "Absence", "Delay", "Technical", "Data Lack", "Other"] },
+              "description": { "type": "string" },
+              "date": { "type": "string" },
+              "createdAt": { "type": "string" }
+            }
+          }
+        },
+        "abandonmentRequest": {
+          "type": "object",
+          "properties": {
+            "reason": { "type": "string", "enum": ["No Commitment", "Repeated Absence", "Interruption", "Work Pressure", "Administrative", "Other"] },
+            "date": { "type": "string" },
+            "status": { "type": "string", "enum": ["Pending", "Approved", "Rejected"] },
+            "notes": { "type": "string" },
+            "createdAt": { "type": "string" }
+          }
+        },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "title", "supervisorId", "specialtyId"]
+    },
+    "rooms": {
+      "title": "Room",
+      "description": "Classroom or laboratory",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "type": { "type": "string", "enum": ["classroom", "lab", "amphi"] },
+        "capacity": { "type": "number" }
+      },
+      "required": ["id", "name", "type"]
+    },
+    "fieldVisits": {
+      "title": "Field Visit",
+      "description": "Field visit request for students",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "teacherId": { "type": "string" },
+        "destination": { "type": "string" },
+        "moduleId": { "type": "string" },
+        "specialtyId": { "type": "string" },
+        "levelId": { "type": "string" },
+        "proposedDate": { "type": "string", "format": "date" },
+        "studentCount": { "type": "number" },
+        "supervisors": { "type": "array", "items": { "type": "string" } },
+        "status": { "type": "string", "enum": ["Pending", "Approved", "Rejected"] },
+        "academicYear": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "teacherId", "destination", "status"]
+    },
+    "certificateRequests": {
+      "title": "Certificate Request",
+      "description": "Request for teaching or supervision certificate",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "teacherId": { "type": "string" },
+        "type": { "type": "string", "enum": ["Teaching", "Supervision"] },
+        "status": { "type": "string", "enum": ["Pending", "Approved", "Rejected"] },
+        "academicYear": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "teacherId", "type", "status"]
+    },
+    "teacherReports": {
+      "title": "Teacher Report",
+      "description": "Problem report or request from a teacher",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "teacherId": { "type": "string" },
+        "type": { "type": "string", "enum": ["Problem", "Request", "Other"] },
+        "subject": { "type": "string" },
+        "content": { "type": "string" },
+        "status": { "type": "string", "enum": ["Pending", "InProgress", "Resolved"] },
+        "response": { "type": "string" },
+        "academicYear": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "teacherId", "type", "subject", "content", "status"]
+    }
+  },
+  "firestore": {
+    "/users/{uid}": { "schema": "users", "description": "User profiles" },
+    "/specialties/{id}": { "schema": "specialties", "description": "Academic specialties" },
+    "/levels/{id}": { "schema": "levels", "description": "Academic levels" },
+    "/modules/{id}": { "schema": "modules", "description": "Academic modules" },
+    "/sessions/{id}": { "schema": "sessions", "description": "Session logs" },
+    "/projects/{id}": { "schema": "projects", "description": "PFE projects" },
+    "/rooms/{id}": { "schema": "rooms", "description": "Rooms and labs" },
+    "/fieldVisits/{id}": { "schema": "fieldVisits", "description": "Field visit requests" },
+    "/certificateRequests/{id}": { "schema": "certificateRequests", "description": "Certificate requests" },
+    "/teacherReports/{id}": { "schema": "teacherReports", "description": "Teacher reports and requests" }
+  }
+}
