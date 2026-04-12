@@ -25,6 +25,7 @@ export interface User {
   isActive?: boolean;
   username?: string;
   password?: string;
+  lastEmailSent?: string | null;
 }
 
 export interface OvertimeRequest {

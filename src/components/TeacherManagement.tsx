@@ -83,6 +83,7 @@ export default function TeacherManagement() {
         isActive: true,
         username,
         password,
+        lastEmailSent: null
       });
       
       // Update username mapping
@@ -390,6 +391,15 @@ export default function TeacherManagement() {
                         )}
                       </div>
                     )}
+                    {teacher.isActive && (
+                      <div className={cn(
+                        "mt-2 flex items-center gap-1.5 text-[10px] font-bold px-2 py-1 rounded-lg w-fit",
+                        teacher.lastEmailSent ? "bg-emerald-50 text-emerald-600" : "bg-slate-50 text-slate-400"
+                      )}>
+                        <Mail className="w-3 h-3" />
+                        {teacher.lastEmailSent ? `آخر إرسال: ${new Date(teacher.lastEmailSent).toLocaleString('ar-DZ', { dateStyle: 'short', timeStyle: 'short' })}` : 'لم يتم الإرسال بعد'}
+                      </div>
+                    )}
                   </div>
                 </div>
                 <span className={cn(
@@ -507,12 +517,22 @@ export default function TeacherManagement() {
                           html 
                         })
                       });
-                      if (response.ok) toast.success('تم إرسال البيانات بنجاح');
-                      else throw new Error();
+                      
+                      const result = await response.json();
+                      
+                      if (response.ok && result.success) {
+                        // Update Firestore with last email sent timestamp
+                        const now = new Date().toISOString();
+                        await updateDoc(doc(db, 'users', teacher.uid), {
+                          lastEmailSent: now
+                        });
+                        setTeachers(prev => prev.map(t => t.uid === teacher.uid ? { ...t, lastEmailSent: now } : t));
+                        toast.success('تم إرسال البيانات بنجاح', { id: loadingToast });
+                      } else {
+                        throw new Error(result.message || 'Failed to send');
+                      }
                     } catch (err) {
-                      toast.error('فشل إرسال البيانات عبر البريد');
-                    } finally {
-                      toast.dismiss(loadingToast);
+                      toast.error('فشل إرسال البيانات عبر البريد', { id: loadingToast });
                     }
                   }}
                   className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2.5 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 transition-all text-sm"
@@ -664,26 +684,35 @@ export default function TeacherManagement() {
                         </div>
                       `;
                       
-                      const loadingToast = toast.loading('جاري إرسال البيانات...');
-                      try {
-                        const response = await fetch('/api/send-email', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ 
-                            to: editingTeacher.email, 
-                            subject, 
-                            body: `مرحباً ${editingTeacher.displayName}، بيانات حسابك هي: اسم المستخدم: ${editingTeacher.username}، كلمة المرور: ${editingTeacher.password}`,
-                            html 
-                          })
+                    const loadingToast = toast.loading('جاري إرسال البيانات...');
+                    try {
+                      const response = await fetch('/api/send-email', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ 
+                          to: editingTeacher.email, 
+                          subject, 
+                          body: `مرحباً ${editingTeacher.displayName}، بيانات حسابك هي: اسم المستخدم: ${editingTeacher.username}، كلمة المرور: ${editingTeacher.password}`,
+                          html 
+                        })
+                      });
+                      
+                      const result = await response.json();
+                      
+                      if (response.ok && result.success) {
+                        const now = new Date().toISOString();
+                        await updateDoc(doc(db, 'users', editingTeacher.uid), {
+                          lastEmailSent: now
                         });
-                        if (response.ok) toast.success('تم إرسال البيانات بنجاح');
-                        else throw new Error();
-                      } catch (err) {
-                        toast.error('فشل إرسال البيانات عبر البريد');
-                      } finally {
-                        toast.dismiss(loadingToast);
+                        setTeachers(prev => prev.map(t => t.uid === editingTeacher.uid ? { ...t, lastEmailSent: now } : t));
+                        toast.success('تم إرسال البيانات بنجاح', { id: loadingToast });
+                      } else {
+                        throw new Error(result.message || 'Failed to send');
                       }
-                    }}
+                    } catch (err) {
+                      toast.error('فشل إرسال البيانات عبر البريد', { id: loadingToast });
+                    }
+                  }}
                     className="flex-1 flex items-center justify-center gap-2 bg-emerald-600 text-white py-3 rounded-xl font-bold hover:bg-emerald-700 transition-all"
                   >
                     <Mail className="w-5 h-5" />
