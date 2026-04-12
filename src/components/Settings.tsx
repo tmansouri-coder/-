@@ -6,8 +6,11 @@ import { getAuth, createUserWithEmailAndPassword } from 'firebase/auth';
 import { db, handleFirestoreError, OperationType, firebaseConfig } from '../lib/firebase';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
+import { useTranslation } from 'react-i18next';
+import { cn } from '../lib/utils';
 
 export default function Settings() {
+  const { t, i18n } = useTranslation();
   const { isAdmin } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isExporting, setIsExporting] = useState(false);
@@ -42,10 +45,10 @@ export default function Settings() {
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      toast.success('تم تصدير النسخة الاحتياطية بنجاح');
+      toast.success(t('backup_export_success') || 'تم تصدير النسخة الاحتياطية بنجاح');
     } catch (err) {
       handleFirestoreError(err, OperationType.GET, 'backup_export');
-      toast.error('فشل تصدير النسخة الاحتياطية');
+      toast.error(t('backup_export_error') || 'فشل تصدير النسخة الاحتياطية');
     } finally {
       setIsExporting(false);
     }
@@ -148,10 +151,10 @@ export default function Settings() {
         }
         if (count > 0) await batch.commit();
       }
-      toast.success('تم مسح كافة البيانات بنجاح');
+      toast.success(t('clear_data_success') || 'تم مسح كافة البيانات بنجاح');
     } catch (err) {
       handleFirestoreError(err, OperationType.DELETE, 'clear_data');
-      toast.error('فشل مسح البيانات');
+      toast.error(t('clear_data_error') || 'فشل مسح البيانات');
     } finally {
       setIsClearing(false);
     }
@@ -220,34 +223,70 @@ export default function Settings() {
     }
   };
 
+  const changeLanguage = (lng: string) => {
+    i18n.changeLanguage(lng);
+    document.documentElement.dir = lng === 'ar' ? 'rtl' : 'ltr';
+    document.documentElement.lang = lng;
+  };
+
   return (
-    <div className="space-y-8" dir="rtl">
+    <div className="space-y-8" dir={i18n.language === 'ar' ? 'rtl' : 'ltr'}>
       <div>
-        <h1 className="text-2xl font-bold text-slate-900">إعدادات النظام</h1>
-        <p className="text-slate-500">تخصيص تفضيلات التطبيق والخيارات العامة</p>
+        <h1 className="text-2xl font-bold text-slate-900">{t('settings')}</h1>
+        <p className="text-slate-500">{t('settings_desc') || 'تخصيص تفضيلات التطبيق والخيارات العامة'}</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2 space-y-6">
+          {/* Language Selection */}
+          <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden">
+            <div className="p-6 border-b border-slate-100 bg-slate-50 flex items-center gap-3">
+              <Globe className="w-5 h-5 text-blue-600" />
+              <h3 className="font-bold text-slate-900">{t('language') || 'اللغة'}</h3>
+            </div>
+            <div className="p-8">
+              <div className="flex items-center gap-4">
+                {[
+                  { id: 'ar', label: 'العربية' },
+                  { id: 'fr', label: 'Français' },
+                  { id: 'en', label: 'English' }
+                ].map((lang) => (
+                  <button
+                    key={lang.id}
+                    onClick={() => changeLanguage(lang.id)}
+                    className={cn(
+                      "flex-1 py-4 rounded-2xl font-bold border-2 transition-all",
+                      i18n.language === lang.id 
+                        ? "bg-blue-50 border-blue-600 text-blue-600" 
+                        : "bg-white border-slate-100 text-slate-500 hover:border-slate-200"
+                    )}
+                  >
+                    {lang.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
           {/* General Settings */}
           <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden">
             <div className="p-6 border-b border-slate-100 bg-slate-50 flex items-center gap-3">
               <SettingsIcon className="w-5 h-5 text-blue-600" />
-              <h3 className="font-bold text-slate-900">الإعدادات العامة</h3>
+              <h3 className="font-bold text-slate-900">{t('general_settings') || 'الإعدادات العامة'}</h3>
             </div>
             <div className="p-8 space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-700">اسم القسم</label>
-                  <input defaultValue="قسم الهندسة الميكانيكية" className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500" />
+                  <label className="text-sm font-bold text-slate-700">{t('department_name') || 'اسم القسم'}</label>
+                  <input defaultValue={t('mechanical_engineering')} className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500" />
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-700">الكلية</label>
-                  <input defaultValue="كلية التكنولوجيا" className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500" />
+                  <label className="text-sm font-bold text-slate-700">{t('faculty') || 'الكلية'}</label>
+                  <input defaultValue={t('faculty_tech') || 'كلية التكنولوجيا'} className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500" />
                 </div>
               </div>
               <div className="space-y-2">
-                <label className="text-sm font-bold text-slate-700">البريد الإلكتروني للقسم</label>
+                <label className="text-sm font-bold text-slate-700">{t('department_email') || 'البريد الإلكتروني للقسم'}</label>
                 <input defaultValue="mech.eng@univ.dz" className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500" />
               </div>
             </div>

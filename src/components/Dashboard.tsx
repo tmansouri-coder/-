@@ -21,21 +21,6 @@ import { seedInitialData } from '../lib/seed';
 import { PedagogicalCalendar, CalendarEvent, CalendarEventType } from '../types';
 import { useTranslation } from 'react-i18next';
 
-const EVENT_TYPE_LABELS: Record<CalendarEventType, string> = {
-  holiday: 'عطلة / أيام مستثناة',
-  exam_s1: 'امتحانات السداسي الأول',
-  exam_s2: 'امتحانات السداسي الثاني',
-  review: 'اطلاع الطلبة على النتائج',
-  deliberation: 'مداولات الدورة العادية',
-  resit_s1: 'استدراكي السداسي الأول',
-  resit_s2: 'استدراكي السداسي الثاني',
-  thesis_submission: 'إيداع مذكرات التخرج',
-  thesis_defense: 'مناقشة مذكرات التخرج',
-  final_deliberation: 'المداولات النهائية',
-  certificates: 'تسليم الشهادات النهائية',
-  master_app: 'الترشح للماستر',
-};
-
 const EVENT_TYPE_COLORS: Record<CalendarEventType, string> = {
   holiday: 'bg-orange-50 text-orange-700 border-orange-100',
   exam_s1: 'bg-blue-50 text-blue-700 border-blue-100',
@@ -54,6 +39,22 @@ const EVENT_TYPE_COLORS: Record<CalendarEventType, string> = {
 export default function Dashboard() {
   const { t, i18n } = useTranslation();
   const isRtl = i18n.language === 'ar';
+  
+  const EVENT_TYPE_LABELS: Record<CalendarEventType, string> = {
+    holiday: t('holiday'),
+    exam_s1: t('exam_s1'),
+    exam_s2: t('exam_s2'),
+    review: t('review'),
+    deliberation: t('deliberation'),
+    resit_s1: t('resit_s1'),
+    resit_s2: t('resit_s2'),
+    thesis_submission: t('thesis_submission'),
+    thesis_defense: t('thesis_defense'),
+    final_deliberation: t('final_deliberation'),
+    certificates: t('certificates_delivery'),
+    master_app: t('master_app'),
+  };
+
   const { user, isAdmin } = useAuth();
   const isTahar = user?.email === 't.mansouri@lagh-univ.dz';
   console.log('Dashboard: Render state:', { user, isAdmin, isTahar });
@@ -110,15 +111,18 @@ export default function Dashboard() {
     try {
       console.log('handleForceSeed: Starting...');
       setIsSeeding(true);
-      setSeedProgress({ step: 'جاري البدء...', percentage: 0 });
+      setSeedProgress({ step: t('loading'), percentage: 0 });
       
       console.log('handleForceSeed: Calling seedInitialData(true)...');
       await seedInitialData(true, (progress) => {
-        setSeedProgress(progress);
+        setSeedProgress({
+          ...progress,
+          step: t(progress.step) || progress.step
+        });
       });
       
       console.log('handleForceSeed: seedInitialData completed successfully');
-      alert('تم توليد البيانات بنجاح! سيتم إعادة تحميل الصفحة الآن.');
+      alert(t('generate_data_success') || 'تم توليد البيانات بنجاح! سيتم إعادة تحميل الصفحة الآن.');
       window.location.reload();
     } catch (err) {
       console.error('handleForceSeed: Seeding failed:', err);
@@ -168,11 +172,11 @@ export default function Dashboard() {
                   )}
                 >
                   <RefreshCw className={cn("w-6 h-6", isSeeding && "animate-spin")} />
-                  {isSeeding ? 'جاري توليد البيانات...' : 'توليد البيانات الأولية للقسم (اضغط هنا)'}
+                  {isSeeding ? t('generating') : t('initial_data_gen')}
                 </button>
               ) : (
                 <div className="flex items-center gap-2 bg-white p-2 rounded-2xl shadow-xl border-2 border-orange-200 animate-in fade-in zoom-in duration-200">
-                  <p className="text-sm font-bold text-slate-700 px-2">هل أنت متأكد؟ سيتم مسح كل شيء.</p>
+                  <p className="text-sm font-bold text-slate-700 px-2">{t('are_you_sure_seed')}</p>
                   <button 
                     onClick={() => {
                       console.log('Confirm: YES clicked');
@@ -181,7 +185,7 @@ export default function Dashboard() {
                     }}
                     className="bg-red-600 text-white px-4 py-2 rounded-xl text-sm font-bold hover:bg-red-700 transition-all"
                   >
-                    نعم، ابدأ
+                    {t('yes_start')}
                   </button>
                   <button 
                     onClick={() => {
@@ -190,7 +194,7 @@ export default function Dashboard() {
                     }}
                     className="bg-slate-100 text-slate-600 px-4 py-2 rounded-xl text-sm font-bold hover:bg-slate-200 transition-all"
                   >
-                    إلغاء
+                    {t('cancel')}
                   </button>
                 </div>
               )}
@@ -226,7 +230,7 @@ export default function Dashboard() {
               transition={{ duration: 0.5 }}
             />
           </div>
-          <p className="text-sm text-orange-700 mt-3 font-medium">يرجى عدم إغلاق الصفحة حتى اكتمال العملية...</p>
+          <p className="text-sm text-orange-700 mt-3 font-medium">{t('seeding_warning')}</p>
         </motion.div>
       )}
 
@@ -260,8 +264,8 @@ export default function Dashboard() {
                   <CalendarDays className="w-6 h-6" />
                 </div>
                 <div>
-                  <h2 className="text-lg font-bold text-slate-900">الرزنامة البيداغوجية</h2>
-                  <p className="text-xs text-slate-500">المواعيد الهامة للسنة الجامعية {calendar?.academicYear}</p>
+                  <h2 className="text-lg font-bold text-slate-900">{t('pedagogical_calendar')}</h2>
+                  <p className="text-xs text-slate-500">{t('academic_year_label')} {calendar?.academicYear}</p>
                 </div>
               </div>
             </div>
@@ -286,8 +290,8 @@ export default function Dashboard() {
 
           <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
             <div className="flex items-center justify-between mb-6">
-              <h2 className="text-lg font-bold text-slate-900">آخر النشاطات</h2>
-              <button className="text-sm text-blue-600 font-medium hover:underline">عرض الكل</button>
+              <h2 className="text-lg font-bold text-slate-900">{t('recent_activities')}</h2>
+              <button className="text-sm text-blue-600 font-medium hover:underline">{t('view_all')}</button>
             </div>
             <div className="space-y-4">
               {recentSessions.length > 0 ? recentSessions.map((session) => (
@@ -300,7 +304,7 @@ export default function Dashboard() {
                       {session.status === 'taught' ? <CheckCircle2 className="w-5 h-5" /> : <AlertCircle className="w-5 h-5" />}
                     </div>
                     <div>
-                      <p className="font-bold text-slate-900">تم تسجيل حصة جديدة</p>
+                      <p className="font-bold text-slate-900">{t('session_logged')}</p>
                       <p className="text-xs text-slate-500">{session.date} - {session.startTime}</p>
                     </div>
                   </div>
@@ -308,22 +312,22 @@ export default function Dashboard() {
                     "px-3 py-1 rounded-full text-xs font-bold",
                     session.status === 'taught' ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"
                   )}>
-                    {session.status === 'taught' ? 'تم التدريس' : 'غياب'}
+                    {session.status === 'taught' ? t('taught') : t('absence')}
                   </span>
                 </div>
               )) : (
-                <p className="text-center text-slate-500 py-8">لا توجد نشاطات مؤخراً</p>
+                <p className="text-center text-slate-500 py-8">{t('no_recent_activities')}</p>
               )}
             </div>
           </div>
         </div>
 
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
-          <h2 className="text-lg font-bold text-slate-900 mb-6">إحصائيات التقدم</h2>
+          <h2 className="text-lg font-bold text-slate-900 mb-6">{t('progress_stats')}</h2>
           <div className="space-y-6">
             <div>
               <div className="flex justify-between mb-2">
-                <span className="text-sm font-medium text-slate-600">مشاريع التخرج</span>
+                <span className="text-sm font-medium text-slate-600">{t('graduation_projects')}</span>
                 <span className="text-sm font-bold text-blue-600">65%</span>
               </div>
               <div className="w-full bg-slate-100 rounded-full h-2">
@@ -332,7 +336,7 @@ export default function Dashboard() {
             </div>
             <div>
               <div className="flex justify-between mb-2">
-                <span className="text-sm font-medium text-slate-600">تغطية المقاييس</span>
+                <span className="text-sm font-medium text-slate-600">{t('module_coverage')}</span>
                 <span className="text-sm font-bold text-emerald-600">82%</span>
               </div>
               <div className="w-full bg-slate-100 rounded-full h-2">
@@ -343,7 +347,7 @@ export default function Dashboard() {
               <div className="flex items-center gap-3 text-amber-600 bg-amber-50 p-4 rounded-xl border border-amber-100">
                 <AlertCircle className="w-5 h-5 shrink-0" />
                 <p className="text-xs font-medium leading-relaxed">
-                  هناك 3 أساتذة لم يقوموا بتسجيل حصصهم لهذا الأسبوع. يرجى المتابعة.
+                  {t('teachers_not_logged', { count: 3 })}
                 </p>
               </div>
             </div>

@@ -96,23 +96,23 @@ export default function App() {
   // Check if account is active (except for the main admin)
   if (user.role !== 'admin' && user.isActive === false) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4 font-sans" dir="rtl">
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4 font-sans" dir={i18n.language === 'ar' ? 'rtl' : 'ltr'}>
         <div className="max-w-md w-full bg-white rounded-3xl shadow-xl p-8 border border-slate-100 text-center space-y-6">
           <div className="w-20 h-20 bg-amber-50 rounded-full flex items-center justify-center mx-auto">
             <Bell className="w-10 h-10 text-amber-600 animate-pulse" />
           </div>
-          <h2 className="text-2xl font-bold text-slate-900">حسابك قيد المراجعة</h2>
+          <h2 className="text-2xl font-bold text-slate-900">{t('account_review')}</h2>
           <p className="text-slate-500 leading-relaxed">
-            تم تسجيل حسابك بنجاح، ولكن يجب تفعيله من قبل رئيس القسم قبل أن تتمكن من الوصول إلى لوحة التحكم.
+            {t('account_review_desc')}
           </p>
           <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 text-sm text-slate-600">
-            يرجى التواصل مع الإدارة لتسريع عملية التفعيل.
+            {t('contact_admin')}
           </div>
           <button 
             onClick={() => window.location.reload()}
             className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-all"
           >
-            تحديث الصفحة
+            {t('refresh_page')}
           </button>
         </div>
       </div>
@@ -152,7 +152,7 @@ export default function App() {
               <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
               <input 
                 type="text" 
-                placeholder="بحث سريع..." 
+                placeholder={t('quick_search')} 
                 className="w-full pr-10 pl-4 py-1.5 bg-slate-50 border border-slate-100 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
               />
             </div>
@@ -168,7 +168,7 @@ export default function App() {
                   "text-[10px] font-bold uppercase",
                   isYearArchived ? "text-amber-600" : "text-slate-400"
                 )}>
-                  {isYearArchived ? 'سنة مؤرشفة:' : 'السنة الدراسية:'}
+                  {isYearArchived ? t('archived_year_label') : t('academic_year_label')}
                 </span>
                 <select 
                   value={selectedYear} 
@@ -188,21 +188,21 @@ export default function App() {
                       setPromptValue('');
                       setPromptConfig({
                         show: true,
-                        title: 'أدخل السنة الدراسية الجديدة (مثال: 2026/2027):',
+                        title: t('new_year_prompt'),
                         onConfirm: async (nextYear) => {
                           if (nextYear) {
                             try {
                               await addYear(nextYear);
-                              toast.success('تم إضافة السنة الدراسية بنجاح');
+                              toast.success(t('add_year_success'));
                             } catch (err) {
-                              toast.error('فشل إضافة السنة الدراسية');
+                              toast.error(t('add_year_error'));
                             }
                           }
                         }
                       });
                     }}
                     className="p-1 hover:bg-white rounded-lg text-slate-400 hover:text-blue-600 transition-all"
-                    title="إضافة سنة دراسية"
+                    title={t('add')}
                   >
                     <Plus className="w-3 h-3" />
                   </button>
@@ -277,13 +277,13 @@ export default function App() {
                 }}
                 className="flex-1 bg-blue-600 text-white py-3 rounded-xl font-bold hover:bg-blue-700 transition-all"
               >
-                تأكيد
+                {t('confirm')}
               </button>
               <button 
                 onClick={() => setPromptConfig(prev => ({ ...prev, show: false }))}
                 className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl font-bold hover:bg-slate-200 transition-all"
               >
-                إلغاء
+                {t('cancel')}
               </button>
             </div>
           </div>

@@ -11,8 +11,11 @@ import {
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import toast from 'react-hot-toast';
+import { useTranslation } from 'react-i18next';
 
 export default function TeacherManagement() {
+  const { t, i18n } = useTranslation();
+  const isRTL = i18n.language === 'ar';
   const [teachers, setTeachers] = useState<User[]>([]);
   const [specialties, setSpecialties] = useState<Specialty[]>([]);
   const [levels, setLevels] = useState<Level[]>([]);
@@ -58,7 +61,7 @@ export default function TeacherManagement() {
 
   const handleActivate = async (teacher: User) => {
     const { username, password } = generateCredentials(teacher.email);
-    const loadingToast = toast.loading(`جاري تفعيل حساب ${teacher.displayName}...`);
+    const loadingToast = toast.loading(t('activation_in_progress', { name: teacher.displayName }));
     
     // Create a secondary app instance to create the user in Auth without logging out the admin
     const secondaryApp = initializeApp(firebaseConfig, 'SecondaryApp');
@@ -93,15 +96,15 @@ export default function TeacherManagement() {
       
       setTeachers(prev => prev.map(t => t.uid === teacher.uid ? { ...t, isActive: true, username, password } : t));
       toast.dismiss(loadingToast);
-      toast.success(`تم تفعيل حساب ${teacher.displayName} بنجاح`);
+      toast.success(t('activation_success', { name: teacher.displayName }));
     } catch (err: any) {
       toast.dismiss(loadingToast);
       console.error('Activation error:', err);
       if (err.code === 'auth/operation-not-allowed') {
-        toast.error('خطأ: يجب تفعيل خيار "Email/Password" في إعدادات Firebase Authentication.');
+        toast.error(t('auth_not_allowed'));
       } else {
         handleFirestoreError(err, OperationType.UPDATE, `users/${teacher.uid}`);
-        toast.error('فشل تفعيل الحساب');
+        toast.error(t('activation_error'));
       }
     } finally {
       // Clean up secondary app
@@ -171,18 +174,22 @@ export default function TeacherManagement() {
       await updateDoc(doc(db, 'users', editingTeacher.uid), updateData);
       setTeachers(prev => prev.map(t => t.uid === editingTeacher.uid ? { ...t, ...updateData } : t));
       setEditingTeacher(null);
-      toast.success('تم تحديث بيانات الأستاذ بنجاح');
+      toast.success(t('update_success'));
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `users/${editingTeacher.uid}`);
+      toast.error(t('update_error'));
     }
   };
 
   const handleDeactivate = async (uid: string) => {
     try {
+      const teacher = teachers.find(t => t.uid === uid);
       await updateDoc(doc(db, 'users', uid), { isActive: false });
       setTeachers(prev => prev.map(t => t.uid === uid ? { ...t, isActive: false } : t));
+      toast.success(t('deactivation_success', { name: teacher?.displayName }));
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `users/${uid}`);
+      toast.error(t('deactivation_error'));
     }
   };
 
@@ -193,11 +200,58 @@ export default function TeacherManagement() {
     try {
       await deleteDoc(doc(db, 'users', uid));
       setTeachers(prev => prev.filter(t => t.uid !== uid));
-      toast.success(`تم حذف الأستاذ ${name} بنجاح`);
+      toast.success(t('delete_success'));
       setTeacherToDelete(null);
     } catch (err) {
       console.error('Delete teacher error:', err);
       handleFirestoreError(err, OperationType.DELETE, `users/${uid}`);
+      toast.error(t('delete_error'));
+    }
+  };
+
+  const handleSendEmail = async (teacher: User) => {
+    if (!teacher.username || !teacher.password) return;
+    
+    const loadingToast = toast.loading(t('sending_data'));
+    try {
+      const response = await fetch('/api/send-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to: teacher.email,
+          subject: t('email_subject'),
+          html: `
+            <div style="font-family: Arial, sans-serif; direction: ${isRTL ? 'rtl' : 'ltr'}; text-align: ${isRTL ? 'right' : 'left'}; padding: 20px; border: 1px solid #e5e7eb; border-radius: 8px;">
+              <h2 style="color: #1e40af;">${t('mechanical_engineering')}</h2>
+              <p>${t('email_hello')} <strong>${teacher.displayName}</strong>،</p>
+              <p>${t('email_credentials_desc')}</p>
+              <div style="background-color: #f3f4f6; padding: 15px; border-radius: 6px; margin: 20px 0;">
+                <p style="margin: 5px 0;"><strong>${t('username')}:</strong> ${teacher.username}</p>
+                <p style="margin: 5px 0;"><strong>${t('password')}:</strong> ${teacher.password}</p>
+                <p style="margin: 5px 0; color: #ef4444; font-size: 0.9em;">* ${t('email_change_password_warning')}</p>
+              </div>
+              <p>${t('email_access_link')}</p>
+              <a href="${window.location.origin}" style="display: inline-block; background-color: #2563eb; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; margin-top: 10px;">${t('access_system')}</a>
+              <p style="margin-top: 30px; border-top: 1px solid #e5e7eb; padding-top: 10px; font-size: 0.8em; color: #6b7280;">
+                ${t('email_automated_footer')}
+              </p>
+            </div>
+          `
+        })
+      });
+
+      if (!response.ok) throw new Error('Failed to send email');
+
+      await updateDoc(doc(db, 'users', teacher.uid), {
+        lastEmailSent: new Date().toISOString()
+      });
+      
+      setTeachers(prev => prev.map(t => t.uid === teacher.uid ? { ...t, lastEmailSent: new Date().toISOString() } : t));
+      toast.dismiss(loadingToast);
+      toast.success(t('send_success'));
+    } catch (err) {
+      toast.dismiss(loadingToast);
+      toast.error(t('send_error'));
     }
   };
 
@@ -211,13 +265,13 @@ export default function TeacherManagement() {
     const role = formData.get('role') as UserRole;
 
     if (!email || !displayName) {
-      toast.error('يرجى ملء كافة الحقول المطلوبة');
+      toast.error(t('fill_required'));
       return;
     }
 
     // Check if email already exists
     if (teachers.some(t => t.email.toLowerCase() === email.toLowerCase())) {
-      toast.error('هذا البريد الإلكتروني مسجل مسبقاً');
+      toast.error(t('email_exists'));
       return;
     }
 
@@ -236,9 +290,10 @@ export default function TeacherManagement() {
       const docRef = await addDoc(collection(db, 'users'), newTeacher);
       setTeachers(prev => [{ uid: docRef.id, ...newTeacher } as User, ...prev]);
       setShowAddModal(false);
-      toast.success('تم إضافة الأستاذ بنجاح. يمكنك الآن تفعيل حسابه.');
+      toast.success(t('add_success'));
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, 'users');
+      toast.error(t('add_error'));
     }
   };
 
@@ -268,6 +323,7 @@ export default function TeacherManagement() {
     navigator.clipboard.writeText(text);
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 2000);
+    toast.success(t('copy_success'));
   };
 
   const filteredTeachers = teachers.filter(t => 
@@ -279,14 +335,14 @@ export default function TeacherManagement() {
   const getSpecialtyManagerEmails = () => teachers.filter(t => t.role === 'specialty_manager').map(t => t.email).join(', ');
   const getTemporaryTeacherEmails = () => teachers.filter(t => t.employmentType === 'temporary' || t.rank === 'Vacataire').map(t => t.email).join(', ');
 
-  if (loading) return <div className="p-8 text-center">جاري التحميل...</div>;
+  if (loading) return <div className="p-8 text-center">{t('loading')}</div>;
 
   return (
-    <div className="space-y-8" dir="rtl">
+    <div className="space-y-8" dir={isRTL ? 'rtl' : 'ltr'}>
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">إدارة الأساتذة</h1>
-          <p className="text-slate-500">تفعيل الحسابات وإدارة صلاحيات الوصول</p>
+          <h1 className="text-2xl font-bold text-slate-900">{t('teacher_management')}</h1>
+          <p className="text-slate-500">{t('settings_desc')}</p>
         </div>
         <div className="flex items-center gap-3">
           <button 
@@ -294,11 +350,11 @@ export default function TeacherManagement() {
             className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-all shadow-lg shadow-blue-100 font-bold"
           >
             <Users className="w-4 h-4" />
-            <span>إضافة أستاذ جديد</span>
+            <span>{t('add_teacher')}</span>
           </button>
           <div className="flex items-center gap-4 bg-blue-50 px-4 py-2 rounded-2xl border border-blue-100">
             <ShieldCheck className="w-5 h-5 text-blue-600" />
-            <span className="text-sm font-bold text-blue-700">إجمالي الأساتذة: {teachers.length}</span>
+            <span className="text-sm font-bold text-blue-700">{t('total_teachers')}: {teachers.length}</span>
           </div>
         </div>
       </div>
@@ -306,13 +362,16 @@ export default function TeacherManagement() {
       {/* Search & Email Collection */}
       <div className="flex flex-col lg:flex-row gap-6 items-start">
         <div className="relative flex-1 w-full">
-          <Search className="absolute right-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+          <Search className={cn("absolute top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400", isRTL ? "right-4" : "left-4")} />
           <input 
             type="text" 
-            placeholder="البحث بالاسم أو البريد الإلكتروني..."
+            placeholder={t('search_teachers_placeholder')}
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full bg-white border border-slate-200 rounded-2xl pr-12 pl-4 py-3 focus:ring-2 focus:ring-blue-500 outline-none shadow-sm"
+            className={cn(
+              "w-full bg-white border border-slate-200 rounded-2xl py-3 focus:ring-2 focus:ring-blue-500 outline-none shadow-sm",
+              isRTL ? "pr-12 pl-4" : "pl-12 pr-4"
+            )}
           />
         </div>
         
@@ -322,21 +381,21 @@ export default function TeacherManagement() {
             className="flex items-center gap-2 px-4 py-3 bg-white border border-slate-200 text-slate-700 rounded-2xl hover:bg-slate-50 transition-all shadow-sm font-bold text-sm"
           >
             {copiedId === 'all-emails' ? <Check className="w-4 h-4 text-emerald-600" /> : <Mail className="w-4 h-4 text-blue-600" />}
-            <span>نسخ إيميلات الكل</span>
+            <span>{t('copy_all_emails')}</span>
           </button>
           <button 
             onClick={() => copyToClipboard(getSpecialtyManagerEmails(), 'manager-emails')}
             className="flex items-center gap-2 px-4 py-3 bg-white border border-slate-200 text-slate-700 rounded-2xl hover:bg-slate-50 transition-all shadow-sm font-bold text-sm"
           >
             {copiedId === 'manager-emails' ? <Check className="w-4 h-4 text-emerald-600" /> : <Shield className="w-4 h-4 text-purple-600" />}
-            <span>نسخ إيميلات مسؤولي التخصصات</span>
+            <span>{t('copy_manager_emails')}</span>
           </button>
           <button 
             onClick={() => copyToClipboard(getTemporaryTeacherEmails(), 'temp-emails')}
             className="flex items-center gap-2 px-4 py-3 bg-white border border-slate-200 text-slate-700 rounded-2xl hover:bg-slate-50 transition-all shadow-sm font-bold text-sm"
           >
             {copiedId === 'temp-emails' ? <Check className="w-4 h-4 text-emerald-600" /> : <Briefcase className="w-4 h-4 text-orange-600" />}
-            <span>نسخ إيميلات الأساتذة المؤقتين</span>
+            <span>{t('copy_temp_emails')}</span>
           </button>
         </div>
       </div>
@@ -362,9 +421,9 @@ export default function TeacherManagement() {
                         teacher.role === 'specialty_manager' ? "bg-blue-100 text-blue-700" :
                         "bg-slate-100 text-slate-600"
                       )}>
-                        {teacher.role === 'admin' ? 'مدير' : 
-                         teacher.role === 'vice_admin' ? 'نائب رئيس قسم' : 
-                         teacher.role === 'specialty_manager' ? 'مسؤول تخصص' : 'أستاذ'}
+                        {teacher.role === 'admin' ? t('role_admin') : 
+                         teacher.role === 'vice_admin' ? t('role_vice_admin') : 
+                         teacher.role === 'specialty_manager' ? t('role_specialty_manager') : t('role_teacher')}
                       </span>
                       {teacher.rank && (
                         <span className="px-3 py-1 bg-emerald-50 text-emerald-700 rounded-full text-[10px] font-bold uppercase tracking-wider">
@@ -373,8 +432,8 @@ export default function TeacherManagement() {
                       )}
                       {teacher.employmentType && (
                         <span className="px-3 py-1 bg-orange-50 text-orange-700 rounded-full text-[10px] font-bold uppercase tracking-wider">
-                          {teacher.employmentType === 'internal' ? 'داخلي' : 
-                           teacher.employmentType === 'external' ? 'خارجي' : 'مؤقت'}
+                          {teacher.employmentType === 'internal' ? t('internal_dept') : 
+                           teacher.employmentType === 'external' ? t('external_dept') : t('temporary_teacher')}
                         </span>
                       )}
                     </div>
@@ -382,11 +441,11 @@ export default function TeacherManagement() {
                       <div className="mt-3 p-3 bg-blue-50 rounded-2xl border border-blue-100 space-y-1">
                         <p className="text-[10px] font-bold text-blue-700 flex items-center gap-1">
                           <Calendar className="w-3 h-3" />
-                          فترة التعيين: {teacher.appointmentDate} إلى {teacher.appointmentEndDate}
+                          {t('appointment_period')} {teacher.appointmentDate} {t('to')} {teacher.appointmentEndDate}
                         </p>
                         {teacher.specialtyIds && teacher.specialtyIds.length > 0 && (
                           <p className="text-[10px] font-medium text-blue-600">
-                            التخصصات: {teacher.specialtyIds.map(id => specialties.find(s => s.id === id)?.name).filter(Boolean).join('، ')}
+                            {t('specialties')}: {teacher.specialtyIds.map(id => specialties.find(s => s.id === id)?.name).filter(Boolean).join('، ')}
                           </p>
                         )}
                       </div>
@@ -397,7 +456,7 @@ export default function TeacherManagement() {
                         teacher.lastEmailSent ? "bg-emerald-50 text-emerald-600" : "bg-slate-50 text-slate-400"
                       )}>
                         <Mail className="w-3 h-3" />
-                        {teacher.lastEmailSent ? `آخر إرسال: ${new Date(teacher.lastEmailSent).toLocaleString('ar-DZ', { dateStyle: 'short', timeStyle: 'short' })}` : 'لم يتم الإرسال بعد'}
+                        {teacher.lastEmailSent ? `${t('last_sent')} ${new Date(teacher.lastEmailSent).toLocaleString(i18n.language, { dateStyle: 'short', timeStyle: 'short' })}` : t('not_sent_yet')}
                       </div>
                     )}
                   </div>
@@ -406,7 +465,7 @@ export default function TeacherManagement() {
                   "px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider",
                   teacher.isActive ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"
                 )}>
-                  {teacher.isActive ? 'نشط' : 'غير نشط'}
+                  {teacher.isActive ? t('active') : t('inactive')}
                 </span>
               </div>
 
@@ -414,7 +473,7 @@ export default function TeacherManagement() {
                 <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 space-y-3">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2 text-xs font-bold text-slate-400 uppercase tracking-widest">
-                      <Key className="w-3 h-3" /> بيانات الدخول
+                      <Key className="w-3 h-3" /> {t('credentials')}
                     </div>
                     <button 
                       onClick={() => copyToClipboard(`Username: ${teacher.username}\nPassword: ${teacher.password}`, teacher.uid)}
@@ -425,11 +484,11 @@ export default function TeacherManagement() {
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <p className="text-[10px] text-slate-400 font-bold uppercase">اسم المستخدم</p>
+                      <p className="text-[10px] text-slate-400 font-bold uppercase">{t('username')}</p>
                       <p className="text-sm font-mono font-bold text-slate-700">{teacher.username}</p>
                     </div>
                     <div>
-                      <p className="text-[10px] text-slate-400 font-bold uppercase">كلمة المرور</p>
+                      <p className="text-[10px] text-slate-400 font-bold uppercase">{t('password')}</p>
                       <p className="text-sm font-mono font-bold text-slate-700">{teacher.password}</p>
                     </div>
                   </div>
@@ -437,18 +496,21 @@ export default function TeacherManagement() {
               ) : (
                 <div className="p-8 bg-slate-50 rounded-2xl border border-dashed border-slate-200 flex flex-col items-center justify-center text-center space-y-2">
                   <AlertCircle className="w-6 h-6 text-slate-300" />
-                  <p className="text-sm text-slate-400 italic">الحساب لم يتم تفعيله بعد</p>
+                  <p className="text-sm text-slate-400 italic">{t('account_not_activated')}</p>
                 </div>
               )}
             </div>
 
-              <div className="bg-slate-50 p-4 md:w-48 border-t md:border-t-0 md:border-r border-slate-100 flex flex-row md:flex-col gap-2 justify-center">
+              <div className={cn(
+                "bg-slate-50 p-4 md:w-48 border-t md:border-t-0 border-slate-100 flex flex-row md:flex-col gap-2 justify-center",
+                isRTL ? "md:border-r" : "md:border-l"
+              )}>
                 <button 
                   onClick={() => setEditingTeacher(teacher)}
                   className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2.5 bg-white border border-slate-200 text-slate-600 rounded-xl font-bold hover:bg-slate-50 transition-all text-sm"
                 >
                   <Edit2 className="w-4 h-4" />
-                  تعديل البيانات
+                  {t('edit')}
                 </button>
                 <button 
                   type="button"
@@ -456,7 +518,7 @@ export default function TeacherManagement() {
                   className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2.5 bg-red-50 text-red-600 border border-red-100 rounded-xl font-bold hover:bg-red-100 transition-all text-sm z-10"
                 >
                   <Trash2 className="w-4 h-4" />
-                  حذف الأستاذ
+                  {t('delete')}
                 </button>
                 {!teacher.isActive ? (
                 <button 
@@ -464,7 +526,7 @@ export default function TeacherManagement() {
                   className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-all text-sm"
                 >
                   <UserCheck className="w-4 h-4" />
-                  تفعيل الحساب
+                  {t('activate')}
                 </button>
               ) : (
                 <button 
@@ -472,78 +534,21 @@ export default function TeacherManagement() {
                   className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2.5 bg-red-50 text-red-600 border border-red-100 rounded-xl font-bold hover:bg-red-100 transition-all text-sm"
                 >
                   <UserX className="w-4 h-4" />
-                  تعطيل الحساب
+                  {t('deactivate')}
                 </button>
               )}
               {teacher.isActive && (
                 <button 
-                  onClick={async () => {
-                    const subject = 'بيانات حسابك في نظام إدارة القسم - جامعة الأغواط';
-                    const html = `
-                      <div dir="rtl" style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #334155; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;">
-                        <div style="background-color: #2563eb; padding: 24px; text-align: center;">
-                          <h1 style="color: white; margin: 0; font-size: 20px;">نظام إدارة قسم الهندسة الميكانيكية</h1>
-                        </div>
-                        <div style="padding: 32px; line-height: 1.6;">
-                          <h2 style="color: #1e293b; margin-top: 0;">مرحباً ${teacher.displayName}،</h2>
-                          <p>تم إنشاء حساب لك في المنصة الرقمية لقسم الهندسة الميكانيكية. إليك بيانات الدخول الخاصة بك:</p>
-                          
-                          <div style="background-color: #f8fafc; padding: 20px; border-radius: 8px; border: 1px solid #f1f5f9; margin: 24px 0;">
-                            <p style="margin: 8px 0;"><strong>اسم المستخدم:</strong> <code style="background: #e2e8f0; padding: 2px 6px; border-radius: 4px;">${teacher.username}</code></p>
-                            <p style="margin: 8px 0;"><strong>كلمة المرور:</strong> <code style="background: #e2e8f0; padding: 2px 6px; border-radius: 4px;">${teacher.password}</code></p>
-                          </div>
-                          
-                          <p style="color: #64748b; font-size: 14px;">ملاحظة: يرجى تغيير كلمة المرور بعد تسجيل الدخول لأول مرة لضمان أمان حسابك.</p>
-                          
-                          <div style="text-align: center; margin-top: 32px;">
-                            <a href="${window.location.origin}" style="background-color: #2563eb; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold;">الدخول إلى المنصة</a>
-                          </div>
-                        </div>
-                        <div style="background-color: #f1f5f9; padding: 16px; text-align: center; font-size: 12px; color: #94a3b8;">
-                          هذا البريد مرسل تلقائياً من نظام إدارة القسم - جامعة عمار ثليجي بالأغواط
-                        </div>
-                      </div>
-                    `;
-                    
-                    const loadingToast = toast.loading('جاري إرسال البيانات...');
-                    try {
-                      const response = await fetch('/api/send-email', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ 
-                          to: teacher.email, 
-                          subject, 
-                          body: `مرحباً ${teacher.displayName}، بيانات حسابك هي: اسم المستخدم: ${teacher.username}، كلمة المرور: ${teacher.password}`,
-                          html 
-                        })
-                      });
-                      
-                      const result = await response.json();
-                      
-                      if (response.ok && result.success) {
-                        // Update Firestore with last email sent timestamp
-                        const now = new Date().toISOString();
-                        await updateDoc(doc(db, 'users', teacher.uid), {
-                          lastEmailSent: now
-                        });
-                        setTeachers(prev => prev.map(t => t.uid === teacher.uid ? { ...t, lastEmailSent: now } : t));
-                        toast.success('تم إرسال البيانات بنجاح', { id: loadingToast });
-                      } else {
-                        throw new Error(result.message || 'Failed to send');
-                      }
-                    } catch (err) {
-                      toast.error('فشل إرسال البيانات عبر البريد', { id: loadingToast });
-                    }
-                  }}
+                  onClick={() => handleSendEmail(teacher)}
                   className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2.5 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 transition-all text-sm"
                 >
                   <Mail className="w-4 h-4" />
-                  إرسال البيانات
+                  {t('send_data')}
                 </button>
               )}
               <button className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2.5 bg-white border border-slate-200 text-slate-600 rounded-xl font-bold hover:bg-slate-50 transition-all text-sm">
                 <ExternalLink className="w-4 h-4" />
-                الملف الشخصي
+                {t('profile')}
               </button>
             </div>
           </div>
@@ -554,41 +559,41 @@ export default function TeacherManagement() {
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
             <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50">
-              <h2 className="text-xl font-bold text-slate-900">تعديل بيانات الأستاذ</h2>
+              <h2 className="text-xl font-bold text-slate-900">{t('edit_teacher')}</h2>
               <button onClick={() => setEditingTeacher(null)} className="p-2 hover:bg-white rounded-xl transition-all"><X className="w-5 h-5 text-slate-400" /></button>
             </div>
             <form onSubmit={handleUpdateTeacher} className="p-6 space-y-6 overflow-y-auto">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-700">الاسم الكامل</label>
+                  <label className="text-sm font-bold text-slate-700">{t('full_name')}</label>
                   <input name="displayName" defaultValue={editingTeacher.displayName} required className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500" />
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-700">الرتبة (Rank)</label>
+                  <label className="text-sm font-bold text-slate-700">{t('rank')}</label>
                   <select name="rank" defaultValue={editingTeacher.rank} className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500">
-                    <option value="Pr">Pr (أستاذ)</option>
-                    <option value="MCA">MCA (أستاذ محاضر أ)</option>
-                    <option value="MCB">MCB (أستاذ محاضر ب)</option>
-                    <option value="MAA">MAA (أستاذ مساعد أ)</option>
-                    <option value="MAB">MAB (أستاذ مساعد ب)</option>
-                    <option value="Vacataire">Vacataire (مؤقت)</option>
+                    <option value="Pr">Pr</option>
+                    <option value="MCA">MCA</option>
+                    <option value="MCB">MCB</option>
+                    <option value="MAA">MAA</option>
+                    <option value="MAB">MAB</option>
+                    <option value="Vacataire">Vacataire</option>
                   </select>
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-700">نوع التوظيف</label>
+                  <label className="text-sm font-bold text-slate-700">{t('employment_type')}</label>
                   <select name="employmentType" defaultValue={editingTeacher.employmentType} className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500">
-                    <option value="internal">دائم بقسم الهندسة الميكانيكية</option>
-                    <option value="external">دائم خارج القسم</option>
-                    <option value="temporary">أستاذ مؤقت</option>
+                    <option value="internal">{t('internal_dept')}</option>
+                    <option value="external">{t('external_dept')}</option>
+                    <option value="temporary">{t('temporary_teacher')}</option>
                   </select>
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-700">الدور (Role)</label>
+                  <label className="text-sm font-bold text-slate-700">{t('role')}</label>
                   <select name="role" defaultValue={editingTeacher.role} className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500">
-                    <option value="teacher">أستاذ</option>
-                    <option value="specialty_manager">مسؤول تخصص</option>
-                    <option value="vice_admin">نائب رئيس قسم</option>
-                    <option value="admin">رئيس قسم</option>
+                    <option value="teacher">{t('role_teacher')}</option>
+                    <option value="specialty_manager">{t('role_specialty_manager')}</option>
+                    <option value="vice_admin">{t('role_vice_admin')}</option>
+                    <option value="admin">{t('role_admin')}</option>
                   </select>
                 </div>
               </div>
@@ -598,20 +603,20 @@ export default function TeacherManagement() {
                 <div className="p-6 bg-blue-50 rounded-3xl border border-blue-100 space-y-4">
                   <h4 className="font-bold text-blue-900 flex items-center gap-2">
                     <GraduationCap className="w-5 h-5" />
-                    تفاصيل مسؤول التخصص
+                    {t('specialty_manager_details')}
                   </h4>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="space-y-2">
-                      <label className="text-sm font-bold text-slate-700">تاريخ بداية التعيين</label>
+                      <label className="text-sm font-bold text-slate-700">{t('appointment_start')}</label>
                       <input type="date" name="appointmentDate" defaultValue={editingTeacher.appointmentDate} className="w-full bg-white border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500" />
                     </div>
                     <div className="flex items-center gap-2 pt-8">
                       <input type="checkbox" name="isRenewed" defaultChecked={editingTeacher.isRenewed} className="w-4 h-4 text-blue-600 rounded" />
-                      <label className="text-sm font-bold text-slate-700">تجديد التعيين (مرة واحدة)</label>
+                      <label className="text-sm font-bold text-slate-700">{t('renewal')}</label>
                     </div>
                   </div>
                   <div className="space-y-2">
-                    <label className="text-sm font-bold text-slate-700">التخصص المسؤول عنه (L3, M1, M2)</label>
+                    <label className="text-sm font-bold text-slate-700">{t('responsible_specialty')}</label>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-40 overflow-y-auto p-2 bg-white rounded-xl border border-blue-100">
                       {Object.entries(getSpecialtyGroups()).map(([name, group]) => (
                         <div key={name} className="space-y-1 p-2 border-b border-slate-50 last:border-0">
@@ -626,7 +631,7 @@ export default function TeacherManagement() {
                                 className="w-3 h-3 text-blue-600 rounded-full" 
                               />
                               <span className="text-[10px] font-medium text-slate-600">
-                                ليسانس (L3) - {name}
+                                {t('cycle_licence')} (L3) - {name}
                               </span>
                             </label>
                           )}
@@ -640,7 +645,7 @@ export default function TeacherManagement() {
                                 className="w-3 h-3 text-blue-600 rounded-full" 
                               />
                               <span className="text-[10px] font-medium text-slate-600">
-                                ماستر (M1+M2) - {name}
+                                {t('cycle_master')} (M1+M2) - {name}
                               </span>
                             </label>
                           )}
@@ -652,74 +657,18 @@ export default function TeacherManagement() {
               )}
 
               <div className="pt-4 flex gap-3">
-                <button type="submit" className="flex-1 bg-blue-600 text-white py-3 rounded-xl font-bold hover:bg-blue-700 transition-all">حفظ التغييرات</button>
+                <button type="submit" className="flex-1 bg-blue-600 text-white py-3 rounded-xl font-bold hover:bg-blue-700 transition-all">{t('save_changes')}</button>
                 {editingTeacher.isActive && (
                   <button 
                     type="button"
-                    onClick={async () => {
-                      const subject = 'بيانات حسابك في نظام إدارة القسم - جامعة الأغواط';
-                      const html = `
-                        <div dir="rtl" style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #334155; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;">
-                          <div style="background-color: #2563eb; padding: 24px; text-align: center;">
-                            <h1 style="color: white; margin: 0; font-size: 20px;">نظام إدارة قسم الهندسة الميكانيكية</h1>
-                          </div>
-                          <div style="padding: 32px; line-height: 1.6;">
-                            <h2 style="color: #1e293b; margin-top: 0;">مرحباً ${editingTeacher.displayName}،</h2>
-                            <p>تم تحديث/إرسال بيانات حسابك في المنصة الرقمية لقسم الهندسة الميكانيكية. إليك بيانات الدخول الخاصة بك:</p>
-                            
-                            <div style="background-color: #f8fafc; padding: 20px; border-radius: 8px; border: 1px solid #f1f5f9; margin: 24px 0;">
-                              <p style="margin: 8px 0;"><strong>اسم المستخدم:</strong> <code style="background: #e2e8f0; padding: 2px 6px; border-radius: 4px;">${editingTeacher.username}</code></p>
-                              <p style="margin: 8px 0;"><strong>كلمة المرور:</strong> <code style="background: #e2e8f0; padding: 2px 6px; border-radius: 4px;">${editingTeacher.password}</code></p>
-                            </div>
-                            
-                            <p style="color: #64748b; font-size: 14px;">ملاحظة: يرجى تغيير كلمة المرور بعد تسجيل الدخول لأول مرة لضمان أمان حسابك.</p>
-                            
-                            <div style="text-align: center; margin-top: 32px;">
-                              <a href="${window.location.origin}" style="background-color: #2563eb; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold;">الدخول إلى المنصة</a>
-                            </div>
-                          </div>
-                          <div style="background-color: #f1f5f9; padding: 16px; text-align: center; font-size: 12px; color: #94a3b8;">
-                            هذا البريد مرسل تلقائياً من نظام إدارة القسم - جامعة عمار ثليجي بالأغواط
-                          </div>
-                        </div>
-                      `;
-                      
-                    const loadingToast = toast.loading('جاري إرسال البيانات...');
-                    try {
-                      const response = await fetch('/api/send-email', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ 
-                          to: editingTeacher.email, 
-                          subject, 
-                          body: `مرحباً ${editingTeacher.displayName}، بيانات حسابك هي: اسم المستخدم: ${editingTeacher.username}، كلمة المرور: ${editingTeacher.password}`,
-                          html 
-                        })
-                      });
-                      
-                      const result = await response.json();
-                      
-                      if (response.ok && result.success) {
-                        const now = new Date().toISOString();
-                        await updateDoc(doc(db, 'users', editingTeacher.uid), {
-                          lastEmailSent: now
-                        });
-                        setTeachers(prev => prev.map(t => t.uid === editingTeacher.uid ? { ...t, lastEmailSent: now } : t));
-                        toast.success('تم إرسال البيانات بنجاح', { id: loadingToast });
-                      } else {
-                        throw new Error(result.message || 'Failed to send');
-                      }
-                    } catch (err) {
-                      toast.error('فشل إرسال البيانات عبر البريد', { id: loadingToast });
-                    }
-                  }}
+                    onClick={() => handleSendEmail(editingTeacher)}
                     className="flex-1 flex items-center justify-center gap-2 bg-emerald-600 text-white py-3 rounded-xl font-bold hover:bg-emerald-700 transition-all"
                   >
                     <Mail className="w-5 h-5" />
-                    إرسال البيانات
+                    {t('send_data')}
                   </button>
                 )}
-                <button type="button" onClick={() => setEditingTeacher(null)} className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl font-bold hover:bg-slate-200 transition-all">إلغاء</button>
+                <button type="button" onClick={() => setEditingTeacher(null)} className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl font-bold hover:bg-slate-200 transition-all">{t('cancel')}</button>
               </div>
             </form>
           </div>
@@ -731,52 +680,52 @@ export default function TeacherManagement() {
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
             <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50">
-              <h2 className="text-xl font-bold text-slate-900">إضافة أستاذ جديد</h2>
+              <h2 className="text-xl font-bold text-slate-900">{t('add_teacher')}</h2>
               <button onClick={() => setShowAddModal(false)} className="p-2 hover:bg-white rounded-xl transition-all"><X className="w-5 h-5 text-slate-400" /></button>
             </div>
             <form onSubmit={handleAddTeacher} className="p-6 space-y-6 overflow-y-auto">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-700">الاسم الكامل</label>
-                  <input name="displayName" placeholder="مثال: محمد علي" required className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500" />
+                  <label className="text-sm font-bold text-slate-700">{t('full_name')}</label>
+                  <input name="displayName" placeholder={t('full_name')} required className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500" />
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-700">البريد الإلكتروني</label>
+                  <label className="text-sm font-bold text-slate-700">{t('email')}</label>
                   <input name="email" type="email" placeholder="example@univ.dz" required className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500" />
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-700">الرتبة (Rank)</label>
+                  <label className="text-sm font-bold text-slate-700">{t('rank')}</label>
                   <select name="rank" defaultValue="MAA" className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500">
-                    <option value="Pr">Pr (أستاذ)</option>
-                    <option value="MCA">MCA (أستاذ محاضر أ)</option>
-                    <option value="MCB">MCB (أستاذ محاضر ب)</option>
-                    <option value="MAA">MAA (أستاذ مساعد أ)</option>
-                    <option value="MAB">MAB (أستاذ مساعد ب)</option>
-                    <option value="Vacataire">Vacataire (مؤقت)</option>
+                    <option value="Pr">Pr</option>
+                    <option value="MCA">MCA</option>
+                    <option value="MCB">MCB</option>
+                    <option value="MAA">MAA</option>
+                    <option value="MAB">MAB</option>
+                    <option value="Vacataire">Vacataire</option>
                   </select>
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-700">نوع التوظيف</label>
+                  <label className="text-sm font-bold text-slate-700">{t('employment_type')}</label>
                   <select name="employmentType" defaultValue="internal" className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500">
-                    <option value="internal">دائم بقسم الهندسة الميكانيكية</option>
-                    <option value="external">دائم خارج القسم</option>
-                    <option value="temporary">أستاذ مؤقت</option>
+                    <option value="internal">{t('internal_dept')}</option>
+                    <option value="external">{t('external_dept')}</option>
+                    <option value="temporary">{t('temporary_teacher')}</option>
                   </select>
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-700">الدور (Role)</label>
+                  <label className="text-sm font-bold text-slate-700">{t('role')}</label>
                   <select name="role" defaultValue="teacher" className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500">
-                    <option value="teacher">أستاذ</option>
-                    <option value="specialty_manager">مسؤول تخصص</option>
-                    <option value="vice_admin">نائب رئيس قسم</option>
-                    <option value="admin">رئيس قسم</option>
+                    <option value="teacher">{t('role_teacher')}</option>
+                    <option value="specialty_manager">{t('role_specialty_manager')}</option>
+                    <option value="vice_admin">{t('role_vice_admin')}</option>
+                    <option value="admin">{t('role_admin')}</option>
                   </select>
                 </div>
               </div>
 
               <div className="pt-4 flex gap-3">
-                <button type="submit" className="flex-1 bg-blue-600 text-white py-3 rounded-xl font-bold hover:bg-blue-700 transition-all">إضافة الأستاذ</button>
-                <button type="button" onClick={() => setShowAddModal(false)} className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl font-bold hover:bg-slate-200 transition-all">إلغاء</button>
+                <button type="submit" className="flex-1 bg-blue-600 text-white py-3 rounded-xl font-bold hover:bg-blue-700 transition-all">{t('add')}</button>
+                <button type="button" onClick={() => setShowAddModal(false)} className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl font-bold hover:bg-slate-200 transition-all">{t('cancel')}</button>
               </div>
             </form>
           </div>
@@ -790,21 +739,21 @@ export default function TeacherManagement() {
               <Trash2 className="w-10 h-10 text-red-600" />
             </div>
             <div>
-              <h3 className="text-xl font-bold text-slate-900">تأكيد الحذف</h3>
-              <p className="text-slate-500 mt-2">هل أنت متأكد من حذف الأستاذ <span className="font-bold text-slate-900">{teacherToDelete.name}</span>؟ لا يمكن التراجع عن هذه العملية.</p>
+              <h3 className="text-xl font-bold text-slate-900">{t('delete_confirm_title')}</h3>
+              <p className="text-slate-500 mt-2">{t('delete_confirm_desc', { name: teacherToDelete.name })}</p>
             </div>
             <div className="flex gap-3">
               <button 
                 onClick={handleDeleteTeacher}
                 className="flex-1 bg-red-600 text-white py-3 rounded-xl font-bold hover:bg-red-700 transition-all"
               >
-                تأكيد الحذف
+                {t('delete')}
               </button>
               <button 
                 onClick={() => setTeacherToDelete(null)}
                 className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl font-bold hover:bg-slate-200 transition-all"
               >
-                إلغاء
+                {t('cancel')}
               </button>
             </div>
           </div>
