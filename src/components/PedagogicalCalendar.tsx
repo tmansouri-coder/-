@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, query, orderBy, where } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { PedagogicalCalendar } from '../types';
 import { Calendar as CalendarIcon, Plus, Trash2, Save, X, AlertCircle, Clock, Info } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { CalendarEvent, CalendarEventType } from '../types';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
+import toast from 'react-hot-toast';
 
 const EVENT_TYPES: { type: CalendarEventType; label: string; color: string }[] = [
   { type: 'holiday', label: 'عطلة / أيام مستثناة', color: 'bg-orange-100 text-orange-700 border-orange-200' },
@@ -29,6 +30,7 @@ export default function PedagogicalCalendarManager() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [newExcludedDay, setNewExcludedDay] = useState('');
   const [showEventModal, setShowEventModal] = useState<{ calendarId: string } | null>(null);
+  const [itemToDelete, setItemToDelete] = useState<{ type: 'calendar' | 'event' | 'excluded', id: string, calendarId?: string, label: string } | null>(null);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -40,6 +42,39 @@ export default function PedagogicalCalendarManager() {
     fetchData();
   }, [selectedYear]);
 
+  const handleAddEvent = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!showEventModal) return;
+    
+    const formData = new FormData(e.currentTarget);
+    const newEvent: CalendarEvent = {
+      id: crypto.randomUUID(),
+      title: EVENT_TYPES.find(t => t.type === formData.get('type'))?.label || '',
+      type: formData.get('type') as CalendarEventType,
+      startDate: formData.get('startDate') as string,
+      endDate: formData.get('endDate') as string,
+    };
+
+    try {
+      const calendar = calendars.find(c => c.id === showEventModal.calendarId);
+      if (!calendar) return;
+
+      const updatedEvents = [...(calendar.events || []), newEvent];
+      await updateDoc(doc(db, 'pedagogicalCalendars', showEventModal.calendarId), {
+        events: updatedEvents
+      });
+
+      setCalendars(prev => prev.map(c => 
+        c.id === showEventModal.calendarId ? { ...c, events: updatedEvents } : c
+      ));
+      setShowEventModal(null);
+      toast.success('تم إضافة الموعد بنجاح');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `pedagogicalCalendars/${showEventModal.calendarId}`);
+      toast.error('خطأ في إضافة الموعد');
+    }
+  };
+
   const handleAddCalendar = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
@@ -49,79 +84,19 @@ export default function PedagogicalCalendarManager() {
       s1End: formData.get('s1End') as string,
       s2Start: formData.get('s2Start') as string,
       s2End: formData.get('s2End') as string,
-      excludedDays: [],
       events: [],
     };
 
     try {
       const docRef = await addDoc(collection(db, 'pedagogicalCalendars'), data);
-      setCalendars(prev => [{ id: docRef.id, ...data }, ...prev]);
+      setCalendars(prev => [{ id: docRef.id, ...data } as PedagogicalCalendar, ...prev]);
       setShowAddModal(false);
     } catch (err) {
       console.error(err);
     }
   };
 
-  const handleAddExcludedDay = async (calendarId: string) => {
-    if (!newExcludedDay) return;
-    const calendar = calendars.find(c => c.id === calendarId);
-    if (!calendar) return;
-
-    const updatedDays = [...calendar.excludedDays, newExcludedDay].sort();
-    try {
-      await updateDoc(doc(db, 'pedagogicalCalendars', calendarId), { excludedDays: updatedDays });
-      setCalendars(prev => prev.map(c => c.id === calendarId ? { ...c, excludedDays: updatedDays } : c));
-      setNewExcludedDay('');
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
-  const removeExcludedDay = async (calendarId: string, day: string) => {
-    if (!window.confirm('هل أنت متأكد من حذف هذا اليوم المستثنى؟')) return;
-    const calendar = calendars.find(c => c.id === calendarId);
-    if (!calendar) return;
-
-    const updatedDays = calendar.excludedDays.filter(d => d !== day);
-    try {
-      await updateDoc(doc(db, 'pedagogicalCalendars', calendarId), { excludedDays: updatedDays });
-      setCalendars(prev => prev.map(c => c.id === calendarId ? { ...c, excludedDays: updatedDays } : c));
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
-  const handleAddEvent = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (!showEventModal) return;
-    const { calendarId } = showEventModal;
-    const calendar = calendars.find(c => c.id === calendarId);
-    if (!calendar) return;
-
-    const formData = new FormData(e.currentTarget);
-    const type = formData.get('type') as CalendarEventType;
-    const eventTypeInfo = EVENT_TYPES.find(t => t.type === type);
-    
-    const newEvent: CalendarEvent = {
-      id: crypto.randomUUID(),
-      title: eventTypeInfo?.label || 'حدث جديد',
-      startDate: formData.get('startDate') as string,
-      endDate: formData.get('endDate') as string,
-      type: type,
-    };
-
-    const updatedEvents = [...(calendar.events || []), newEvent].sort((a, b) => a.startDate.localeCompare(b.startDate));
-    try {
-      await updateDoc(doc(db, 'pedagogicalCalendars', calendarId), { events: updatedEvents });
-      setCalendars(prev => prev.map(c => c.id === calendarId ? { ...c, events: updatedEvents } : c));
-      setShowEventModal(null);
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
   const removeEvent = async (calendarId: string, eventId: string) => {
-    if (!window.confirm('هل أنت متأكد من حذف هذا الموعد؟')) return;
     const calendar = calendars.find(c => c.id === calendarId);
     if (!calendar) return;
 
@@ -129,16 +104,17 @@ export default function PedagogicalCalendarManager() {
     try {
       await updateDoc(doc(db, 'pedagogicalCalendars', calendarId), { events: updatedEvents });
       setCalendars(prev => prev.map(c => c.id === calendarId ? { ...c, events: updatedEvents } : c));
+      setItemToDelete(null);
     } catch (err) {
       console.error(err);
     }
   };
 
   const deleteCalendar = async (calendarId: string) => {
-    if (!window.confirm('هل أنت متأكد من حذف هذه السنة الجامعية بالكامل؟')) return;
     try {
       await deleteDoc(doc(db, 'pedagogicalCalendars', calendarId));
       setCalendars(prev => prev.filter(c => c.id !== calendarId));
+      setItemToDelete(null);
     } catch (err) {
       console.error(err);
     }
@@ -176,7 +152,7 @@ export default function PedagogicalCalendarManager() {
                 </div>
               </div>
               <button 
-                onClick={() => deleteCalendar(cal.id)}
+                onClick={() => setItemToDelete({ type: 'calendar', id: cal.id, label: cal.academicYear })}
                 className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all"
                 title="حذف السنة الجامعية"
               >
@@ -187,7 +163,7 @@ export default function PedagogicalCalendarManager() {
             <div className="p-8 space-y-12">
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
                 {/* Semester Dates */}
-                <div className="space-y-6">
+                <div className="space-y-6 lg:col-span-2">
                   <h4 className="font-bold text-slate-900 flex items-center gap-2">
                     <div className="w-1.5 h-6 bg-blue-600 rounded-full" />
                     فترات السداسيات
@@ -207,43 +183,6 @@ export default function PedagogicalCalendarManager() {
                         <p className="text-sm text-slate-600">النهاية: <span className="font-bold">{cal.s2End}</span></p>
                       </div>
                     </div>
-                  </div>
-                </div>
-
-                {/* Excluded Days */}
-                <div className="space-y-6">
-                  <h4 className="font-bold text-slate-900 flex items-center gap-2">
-                    <div className="w-1.5 h-6 bg-orange-600 rounded-full" />
-                    الأيام المستثناة (العطل الفردية)
-                  </h4>
-                  <div className="flex gap-2">
-                    <input 
-                      type="date" 
-                      value={newExcludedDay}
-                      onChange={(e) => setNewExcludedDay(e.target.value)}
-                      className="flex-1 bg-slate-50 border-none rounded-xl px-4 py-2 focus:ring-2 focus:ring-orange-500"
-                    />
-                    <button 
-                      onClick={() => handleAddExcludedDay(cal.id)}
-                      className="px-4 py-2 bg-orange-600 text-white rounded-xl hover:bg-orange-700 transition-all font-bold"
-                    >
-                      إضافة
-                    </button>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {cal.excludedDays.length > 0 ? cal.excludedDays.map(day => (
-                      <div key={day} className="flex items-center gap-2 px-3 py-1.5 bg-slate-100 text-slate-700 rounded-lg text-sm font-medium group">
-                        <span>{day}</span>
-                        <button 
-                          onClick={() => removeExcludedDay(cal.id, day)}
-                          className="text-slate-400 hover:text-red-600 transition-colors"
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
-                      </div>
-                    )) : (
-                      <p className="text-sm text-slate-400 italic">لا توجد أيام مستثناة مضافة بعد</p>
-                    )}
                   </div>
                 </div>
               </div>
@@ -270,7 +209,7 @@ export default function PedagogicalCalendarManager() {
                     return (
                       <div key={event.id} className={cn("p-4 rounded-2xl border flex flex-col justify-between group relative", typeInfo?.color)}>
                         <button 
-                          onClick={() => removeEvent(cal.id, event.id)}
+                          onClick={() => setItemToDelete({ type: 'event', id: event.id, calendarId: cal.id, label: typeInfo?.label || '' })}
                           className="absolute top-2 left-2 p-1.5 bg-white/80 hover:bg-white text-red-600 rounded-lg transition-all shadow-sm z-10"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
@@ -384,6 +323,43 @@ export default function PedagogicalCalendarManager() {
                 <button type="button" onClick={() => setShowEventModal(null)} className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl font-bold hover:bg-slate-200 transition-all">إلغاء</button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {itemToDelete && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl p-8 text-center space-y-6">
+            <div className="w-20 h-20 bg-red-50 rounded-full flex items-center justify-center mx-auto">
+              <Trash2 className="w-10 h-10 text-red-600" />
+            </div>
+            <div className="space-y-2">
+              <h3 className="text-xl font-bold text-slate-900">تأكيد الحذف</h3>
+              <p className="text-slate-500">
+                هل أنت متأكد من حذف {itemToDelete.type === 'calendar' ? 'السنة الجامعية' : 'الموعد'} "{itemToDelete.label}"؟
+              </p>
+            </div>
+            <div className="flex gap-3">
+              <button 
+                onClick={() => {
+                  if (itemToDelete.type === 'calendar') {
+                    deleteCalendar(itemToDelete.id);
+                  } else if (itemToDelete.type === 'event' && itemToDelete.calendarId) {
+                    removeEvent(itemToDelete.calendarId, itemToDelete.id);
+                  }
+                }}
+                className="flex-1 bg-red-600 text-white py-3 rounded-xl font-bold hover:bg-red-700 transition-all"
+              >
+                نعم، احذف
+              </button>
+              <button 
+                onClick={() => setItemToDelete(null)}
+                className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl font-bold hover:bg-slate-200 transition-all"
+              >
+                إلغاء
+              </button>
+            </div>
           </div>
         </div>
       )}

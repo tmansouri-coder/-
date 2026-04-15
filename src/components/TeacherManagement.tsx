@@ -7,11 +7,12 @@ import { User, Rank, EmploymentType, UserRole, Specialty, Level, Cycle } from '.
 import { 
   Users, Search, Shield, Mail, Key, Copy, Check, 
   UserCheck, UserX, MoreVertical, ExternalLink, ShieldCheck, AlertCircle,
-  Edit2, X, Calendar, GraduationCap, Briefcase, Trash2, User as UserIcon
+  Edit2, X, Calendar, GraduationCap, Briefcase, Trash2, User as UserIcon, Plus, Clock, MessageSquare, Copy as CopyIcon
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import toast from 'react-hot-toast';
 import { useTranslation } from 'react-i18next';
+import { motion, AnimatePresence } from 'motion/react';
 
 export default function TeacherManagement() {
   const { t, i18n } = useTranslation();
@@ -56,37 +57,6 @@ export default function TeacherManagement() {
     return { username, password };
   };
 
-  const handleActivate = async (teacher: User) => {
-    const username = teacher.email.split('@')[0].toLowerCase();
-    const loadingToast = toast.loading(t('activation_in_progress', { name: teacher.displayName }));
-    
-    try {
-      // Update Firestore
-      const batch = writeBatch(db);
-      
-      const updateData: any = {
-        isActive: true,
-        username,
-        lastEmailSent: null
-      };
-      
-      batch.update(doc(db, 'users', teacher.uid), updateData);
-      batch.set(doc(db, 'usernames', username), { email: teacher.email });
-      
-      await batch.commit();
-      
-      setTeachers(prev => prev.map(t => t.uid === teacher.uid ? { ...t, ...updateData } : t));
-      toast.dismiss(loadingToast);
-      toast.success(t('activation_success', { name: teacher.displayName }));
-    } catch (err: any) {
-      toast.dismiss(loadingToast);
-      console.error('Activation error:', err);
-      toast.error(t('activation_error') + ': ' + (err.message || 'Unknown error'));
-    }
-  };
-
-  // handleResetPassword is no longer needed with Google login
-
   const handleUpdateTeacher = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!editingTeacher) return;
@@ -105,13 +75,6 @@ export default function TeacherManagement() {
       displayName,
       email
     };
-
-    // If email changed, we need to update username mapping if user is active
-    const emailChanged = email !== editingTeacher.email;
-    if (emailChanged && editingTeacher.isActive) {
-      const newUsername = email.split('@')[0].toLowerCase();
-      updateData.username = newUsername;
-    }
 
     if (role === 'specialty_manager') {
       let selectedSpecialtyIds = Array.from(formData.getAll('specialtyIds')) as string[];
@@ -158,55 +121,23 @@ export default function TeacherManagement() {
       const batch = writeBatch(db);
       batch.update(doc(db, 'users', editingTeacher.uid), updateData);
       
-      if (emailChanged && editingTeacher.isActive) {
-        const oldUsername = editingTeacher.username?.toLowerCase();
-        const newUsername = updateData.username.toLowerCase();
-        
-        if (oldUsername) {
-          batch.delete(doc(db, 'usernames', oldUsername));
-        }
-        batch.set(doc(db, 'usernames', newUsername), { email });
-      }
-      
       await batch.commit();
       
       setTeachers(prev => prev.map(t => t.uid === editingTeacher.uid ? { ...t, ...updateData } : t));
       setEditingTeacher(null);
       toast.success(t('update_success'));
-      if (emailChanged) {
-        alert(t('email_change_auth_warning'));
-      }
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `users/${editingTeacher.uid}`);
       toast.error(t('update_error'));
     }
   };
 
-  const handleDeactivate = async (uid: string) => {
-    try {
-      const teacher = teachers.find(t => t.uid === uid);
-      await updateDoc(doc(db, 'users', uid), { isActive: false });
-      setTeachers(prev => prev.map(t => t.uid === uid ? { ...t, isActive: false } : t));
-      toast.success(t('deactivation_success', { name: teacher?.displayName }));
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `users/${uid}`);
-      toast.error(t('deactivation_error'));
-    }
-  };
-
   const handleDeleteTeacher = async () => {
     if (!teacherToDelete) return;
     const { uid } = teacherToDelete;
-    const teacher = teachers.find(t => t.uid === uid);
     
     try {
-      const batch = writeBatch(db);
-      batch.delete(doc(db, 'users', uid));
-      if (teacher?.username) {
-        batch.delete(doc(db, 'usernames', teacher.username.toLowerCase()));
-      }
-      await batch.commit();
-      
+      await deleteDoc(doc(db, 'users', uid));
       setTeachers(prev => prev.filter(t => t.uid !== uid));
       toast.success(t('delete_success'));
       setTeacherToDelete(null);
@@ -214,51 +145,6 @@ export default function TeacherManagement() {
       console.error('Delete teacher error:', err);
       handleFirestoreError(err, OperationType.DELETE, `users/${uid}`);
       toast.error(t('delete_error'));
-    }
-  };
-
-  const handleSendEmail = async (teacher: User) => {
-    if (!teacher.username) return;
-    
-    const loadingToast = toast.loading(t('sending_data'));
-    try {
-      const response = await fetch('/api/send-email', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          to: teacher.email,
-          subject: t('email_subject'),
-          html: `
-            <div style="font-family: Arial, sans-serif; direction: ${isRTL ? 'rtl' : 'ltr'}; text-align: ${isRTL ? 'right' : 'left'}; padding: 20px; border: 1px solid #e5e7eb; border-radius: 8px;">
-              <h2 style="color: #1e40af;">${t('mechanical_engineering')}</h2>
-              <p>${t('email_hello')} <strong>${teacher.displayName}</strong>،</p>
-              <p>${t('email_credentials_desc_google')}</p>
-              <div style="background-color: #f3f4f6; padding: 15px; border-radius: 6px; margin: 20px 0;">
-                <p style="margin: 5px 0;"><strong>${t('username')}:</strong> ${teacher.username}</p>
-                <p style="margin: 5px 0; color: #1e40af; font-size: 0.9em;">* ${t('use_google_login_note')}</p>
-              </div>
-              <p>${t('email_access_link')}</p>
-              <a href="${window.location.origin}" style="display: inline-block; background-color: #2563eb; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; margin-top: 10px;">${t('access_system')}</a>
-              <p style="margin-top: 30px; border-top: 1px solid #e5e7eb; padding-top: 10px; font-size: 0.8em; color: #6b7280;">
-                ${t('email_automated_footer')}
-              </p>
-            </div>
-          `
-        })
-      });
-
-      if (!response.ok) throw new Error('Failed to send email');
-
-      await updateDoc(doc(db, 'users', teacher.uid), {
-        lastEmailSent: new Date().toISOString()
-      });
-      
-      setTeachers(prev => prev.map(t => t.uid === teacher.uid ? { ...t, lastEmailSent: new Date().toISOString() } : t));
-      toast.dismiss(loadingToast);
-      toast.success(t('send_success'));
-    } catch (err) {
-      toast.dismiss(loadingToast);
-      toast.error(t('send_error'));
     }
   };
 
@@ -290,7 +176,6 @@ export default function TeacherManagement() {
         rank,
         employmentType,
         role,
-        isActive: false,
         createdAt: new Date().toISOString(),
       };
 
@@ -305,7 +190,6 @@ export default function TeacherManagement() {
   };
 
   const getSpecialtyGroups = () => {
-    // Group specialties by name to handle L3, M1, M2 together
     const groups: { [name: string]: { l3?: Specialty, master?: Specialty[] } } = {};
     specialties.forEach(s => {
       const level = levels.find(l => l.id === s.levelId);
@@ -340,223 +224,215 @@ export default function TeacherManagement() {
 
   const getAllEmails = () => teachers.map(t => t.email).join(', ');
   const getSpecialtyManagerEmails = () => teachers.filter(t => t.role === 'specialty_manager').map(t => t.email).join(', ');
-  const getTemporaryTeacherEmails = () => teachers.filter(t => t.employmentType === 'temporary' || t.rank === 'Vacataire').map(t => t.email).join(', ');
 
   if (loading) return <div className="p-8 text-center">{t('loading')}</div>;
 
   return (
-    <div className="space-y-8" dir={isRTL ? 'rtl' : 'ltr'}>
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900">{t('teacher_management')}</h1>
-          <p className="text-slate-500">{t('settings_desc')}</p>
+    <div className="space-y-10 pb-12" dir={isRTL ? 'rtl' : 'ltr'}>
+      {/* Header Section */}
+      <div className="flex flex-col md:flex-row md:items-end justify-between gap-8">
+        <div className="space-y-2">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 text-blue-600 border border-blue-100 mb-2">
+            <ShieldCheck className="w-4 h-4" />
+            <span className="text-[10px] font-black uppercase tracking-widest">{t('administration')}</span>
+          </div>
+          <h1 className="text-4xl font-black text-slate-900 tracking-tight leading-none">{t('teacher_management')}</h1>
+          <p className="text-slate-500 font-medium text-lg">{t('settings_desc')}</p>
         </div>
-        <div className="flex items-center gap-3">
-          <button 
+        <div className="flex flex-wrap items-center gap-4">
+          <motion.button 
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.98 }}
             onClick={() => setShowAddModal(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-all shadow-lg shadow-blue-100 font-bold"
+            className="px-8 py-4 bg-blue-600 text-white rounded-3xl font-black text-sm uppercase tracking-widest hover:bg-blue-700 transition-all shadow-xl shadow-blue-100 flex items-center gap-3 group"
           >
-            <Users className="w-4 h-4" />
+            <Plus className="w-5 h-5 transition-transform group-hover:rotate-90" />
             <span>{t('add_teacher')}</span>
-          </button>
-          <div className="flex items-center gap-4 bg-blue-50 px-4 py-2 rounded-2xl border border-blue-100">
-            <ShieldCheck className="w-5 h-5 text-blue-600" />
-            <span className="text-sm font-bold text-blue-700">{t('total_teachers')}: {teachers.length}</span>
+          </motion.button>
+          
+          <div className="bg-white px-6 py-4 rounded-3xl shadow-sm border border-slate-100 flex items-center gap-4">
+            <div className="w-12 h-12 rounded-2xl bg-slate-50 flex items-center justify-center text-slate-400">
+              <Users className="w-6 h-6" />
+            </div>
+            <div>
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1.5">{t('total_teachers')}</p>
+              <p className="text-2xl font-black text-slate-900 leading-none">{teachers.length}</p>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Search & Email Collection */}
-      <div className="flex flex-col lg:flex-row gap-6 items-start">
-        <div className="relative flex-1 w-full">
-          <Search className={cn("absolute top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400", isRTL ? "right-4" : "left-4")} />
+      {/* Search & Quick Actions Bento */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <div className="lg:col-span-7 relative group">
+          <div className={cn(
+            "absolute top-1/2 -translate-y-1/2 w-12 h-12 flex items-center justify-center text-slate-300 transition-colors group-focus-within:text-blue-500",
+            isRTL ? "right-2" : "left-2"
+          )}>
+            <Search className="w-6 h-6" />
+          </div>
           <input 
             type="text" 
             placeholder={t('search_teachers_placeholder')}
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className={cn(
-              "w-full bg-white border border-slate-200 rounded-2xl py-3 focus:ring-2 focus:ring-blue-500 outline-none shadow-sm",
-              isRTL ? "pr-12 pl-4" : "pl-12 pr-4"
+              "w-full bg-white border border-slate-100 rounded-[2rem] py-6 focus:ring-8 focus:ring-blue-500/5 focus:border-blue-500 outline-none shadow-sm transition-all text-xl font-medium placeholder:text-slate-300",
+              isRTL ? "pr-14 pl-8" : "pl-14 pr-8"
             )}
           />
         </div>
         
-        <div className="flex flex-wrap gap-3">
-          <button 
+        <div className="lg:col-span-5 grid grid-cols-2 gap-4">
+          <motion.button 
+            whileHover={{ y: -2 }}
             onClick={() => copyToClipboard(getAllEmails(), 'all-emails')}
-            className="flex items-center gap-2 px-4 py-3 bg-white border border-slate-200 text-slate-700 rounded-2xl hover:bg-slate-50 transition-all shadow-sm font-bold text-sm"
+            className="flex items-center justify-center gap-3 px-4 py-4 bg-white border border-slate-100 text-slate-700 rounded-[2rem] hover:bg-blue-50 hover:border-blue-100 transition-all shadow-sm font-black text-[10px] uppercase tracking-widest group"
           >
-            {copiedId === 'all-emails' ? <Check className="w-4 h-4 text-emerald-600" /> : <Mail className="w-4 h-4 text-blue-600" />}
+            <div className="w-8 h-8 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-all">
+              {copiedId === 'all-emails' ? <Check className="w-4 h-4" /> : <Mail className="w-4 h-4" />}
+            </div>
             <span>{t('copy_all_emails')}</span>
-          </button>
-          <button 
+          </motion.button>
+          <motion.button 
+            whileHover={{ y: -2 }}
             onClick={() => copyToClipboard(getSpecialtyManagerEmails(), 'manager-emails')}
-            className="flex items-center gap-2 px-4 py-3 bg-white border border-slate-200 text-slate-700 rounded-2xl hover:bg-slate-50 transition-all shadow-sm font-bold text-sm"
+            className="flex items-center justify-center gap-3 px-4 py-4 bg-white border border-slate-100 text-slate-700 rounded-[2rem] hover:bg-purple-50 hover:border-purple-100 transition-all shadow-sm font-black text-[10px] uppercase tracking-widest group"
           >
-            {copiedId === 'manager-emails' ? <Check className="w-4 h-4 text-emerald-600" /> : <Shield className="w-4 h-4 text-purple-600" />}
+            <div className="w-8 h-8 rounded-xl bg-purple-50 flex items-center justify-center text-purple-600 group-hover:bg-purple-600 group-hover:text-white transition-all">
+              {copiedId === 'manager-emails' ? <Check className="w-4 h-4" /> : <Shield className="w-4 h-4" />}
+            </div>
             <span>{t('copy_manager_emails')}</span>
-          </button>
-          <button 
-            onClick={() => copyToClipboard(getTemporaryTeacherEmails(), 'temp-emails')}
-            className="flex items-center gap-2 px-4 py-3 bg-white border border-slate-200 text-slate-700 rounded-2xl hover:bg-slate-50 transition-all shadow-sm font-bold text-sm"
-          >
-            {copiedId === 'temp-emails' ? <Check className="w-4 h-4 text-emerald-600" /> : <Briefcase className="w-4 h-4 text-orange-600" />}
-            <span>{t('copy_temp_emails')}</span>
-          </button>
+          </motion.button>
         </div>
       </div>
 
-      {/* Teachers List */}
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-        {filteredTeachers.map(teacher => (
-          <div key={teacher.uid} className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden flex flex-col md:flex-row">
-            <div className="p-6 flex-1 space-y-4">
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-4">
-                  <div className="w-14 h-14 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400">
-                    <Users className="w-7 h-7" />
-                  </div>
-                  <div>
-                    <h3 className="text-lg font-bold text-slate-900">{teacher.displayName}</h3>
-                    <p className="text-sm text-slate-500 flex items-center gap-1 mb-2"><Mail className="w-3 h-3" /> {teacher.email}</p>
-                    <div className="flex flex-wrap gap-2">
-                      <span className={cn(
-                        "px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider",
-                        teacher.role === 'admin' ? "bg-red-100 text-red-700" :
-                        teacher.role === 'vice_admin' ? "bg-purple-100 text-purple-700" :
-                        teacher.role === 'specialty_manager' ? "bg-blue-100 text-blue-700" :
-                        "bg-slate-100 text-slate-600"
-                      )}>
-                        {teacher.role === 'admin' ? t('role_admin') : 
-                         teacher.role === 'vice_admin' ? t('role_vice_admin') : 
-                         teacher.role === 'specialty_manager' ? t('role_specialty_manager') : t('role_teacher')}
-                      </span>
-                      {teacher.rank && (
-                        <span className="px-3 py-1 bg-emerald-50 text-emerald-700 rounded-full text-[10px] font-bold uppercase tracking-wider">
-                          {teacher.rank}
-                        </span>
-                      )}
-                      {teacher.employmentType && (
-                        <span className="px-3 py-1 bg-orange-50 text-orange-700 rounded-full text-[10px] font-bold uppercase tracking-wider">
-                          {teacher.employmentType === 'internal' ? t('internal_dept') : 
-                           teacher.employmentType === 'external' ? t('external_dept') : t('temporary_teacher')}
-                        </span>
-                      )}
-                    </div>
-                    {teacher.role === 'specialty_manager' && teacher.appointmentDate && (
-                      <div className="mt-3 p-3 bg-blue-50 rounded-2xl border border-blue-100 space-y-1">
-                        <p className="text-[10px] font-bold text-blue-700 flex items-center gap-1">
-                          <Calendar className="w-3 h-3" />
-                          {t('appointment_period')} {teacher.appointmentDate} {t('to')} {teacher.appointmentEndDate}
-                        </p>
-                        {teacher.specialtyIds && teacher.specialtyIds.length > 0 && (
-                          <p className="text-[10px] font-medium text-blue-600">
-                            {t('specialties')}: {teacher.specialtyIds.map(id => specialties.find(s => s.id === id)?.name).filter(Boolean).join('، ')}
-                          </p>
+      {/* Teachers Grid */}
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
+        <AnimatePresence mode="popLayout">
+          {filteredTeachers.map((teacher, i) => (
+            <motion.div 
+              key={teacher.uid}
+              layout
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              transition={{ duration: 0.3, delay: i * 0.03 }}
+              className="group bg-white rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-2xl hover:shadow-blue-500/10 transition-all duration-500 overflow-hidden flex flex-col md:flex-row"
+            >
+              <div className="p-10 flex-1 space-y-8">
+                <div className="flex items-start justify-between">
+                  <div className="flex items-center gap-6">
+                    <div className="relative">
+                      <div className="w-24 h-24 rounded-[2rem] bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-300 group-hover:bg-blue-600 group-hover:text-white group-hover:border-blue-600 transition-all duration-500 shadow-sm overflow-hidden">
+                        {teacher.photoURL ? (
+                          <img src={teacher.photoURL} alt={teacher.displayName} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                        ) : (
+                          <UserIcon className="w-12 h-12" />
                         )}
                       </div>
-                    )}
-                    {teacher.isActive && (
-                      <div className={cn(
-                        "mt-2 flex items-center gap-1.5 text-[10px] font-bold px-2 py-1 rounded-lg w-fit",
-                        teacher.lastEmailSent ? "bg-emerald-50 text-emerald-600" : "bg-slate-50 text-slate-400"
-                      )}>
-                        <Mail className="w-3 h-3" />
-                        {teacher.lastEmailSent ? `${t('last_sent')} ${new Date(teacher.lastEmailSent).toLocaleString(i18n.language, { dateStyle: 'short', timeStyle: 'short' })}` : t('not_sent_yet')}
+                    </div>
+                    <div>
+                      <h3 className="text-3xl font-black text-slate-900 tracking-tight group-hover:text-blue-600 transition-colors leading-tight">{teacher.displayName}</h3>
+                      <div className="flex items-center gap-3 mt-2">
+                        <div className="flex items-center gap-1.5 text-xs font-bold text-slate-400">
+                          <Mail className="w-3.5 h-3.5" />
+                          {teacher.email}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap gap-2.5">
+                  <div className={cn(
+                    "px-5 py-2.5 rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-sm border",
+                    teacher.role === 'admin' ? "bg-red-50 text-red-600 border-red-100" :
+                    teacher.role === 'vice_admin' ? "bg-purple-50 text-purple-600 border-purple-100" :
+                    teacher.role === 'specialty_manager' ? "bg-blue-50 text-blue-600 border-blue-100" :
+                    "bg-slate-50 text-slate-600 border-slate-100"
+                  )}>
+                    {teacher.role === 'admin' ? t('role_admin') : 
+                     teacher.role === 'vice_admin' ? t('role_vice_admin') : 
+                     teacher.role === 'specialty_manager' ? t('role_specialty_manager') : t('role_teacher')}
+                  </div>
+                  {teacher.rank && (
+                    <div className="px-5 py-2.5 bg-emerald-50 text-emerald-600 border border-emerald-100 rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-sm">
+                      {teacher.rank}
+                    </div>
+                  )}
+                  {teacher.employmentType && (
+                    <div className="px-5 py-2.5 bg-orange-50 text-orange-600 border border-orange-100 rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-sm">
+                      {teacher.employmentType === 'internal' ? t('internal_dept') : 
+                       teacher.employmentType === 'external' ? t('external_dept') : t('temporary_teacher')}
+                    </div>
+                  )}
+                </div>
+
+                {teacher.role === 'specialty_manager' && teacher.appointmentDate && (
+                  <div className="p-6 bg-blue-50/30 rounded-[2rem] border border-blue-100/50 space-y-5">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3 text-blue-700">
+                        <div className="w-10 h-10 rounded-2xl bg-white border border-blue-100 flex items-center justify-center shadow-sm">
+                          <Calendar className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-black uppercase tracking-widest opacity-50 leading-none mb-1">{t('appointment_period')}</p>
+                          <p className="text-xs font-black text-blue-900">
+                            {teacher.appointmentDate} <span className="mx-2 opacity-30">→</span> {teacher.appointmentEndDate}
+                          </p>
+                        </div>
+                      </div>
+                      {teacher.isRenewed && (
+                        <div className="px-3 py-1 bg-blue-600 text-white rounded-lg text-[8px] font-black uppercase tracking-widest">
+                          {t('renewed')}
+                        </div>
+                      )}
+                    </div>
+                    {teacher.specialtyIds && teacher.specialtyIds.length > 0 && (
+                      <div className="flex flex-wrap gap-2">
+                        {teacher.specialtyIds.map(id => {
+                          const spec = specialties.find(s => s.id === id);
+                          return spec ? (
+                            <div key={id} className="px-4 py-2 bg-white border border-blue-100 text-blue-600 rounded-xl text-[10px] font-black uppercase tracking-widest shadow-sm">
+                              {spec.name}
+                            </div>
+                          ) : null;
+                        })}
                       </div>
                     )}
                   </div>
-                </div>
-                <span className={cn(
-                  "px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider",
-                  teacher.isActive ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"
-                )}>
-                  {teacher.isActive ? t('active') : t('inactive')}
-                </span>
+                )}
               </div>
 
-              {teacher.isActive && teacher.username ? (
-                <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 text-xs font-bold text-slate-400 uppercase tracking-widest">
-                      <UserIcon className="w-3 h-3" /> {t('account_info')}
-                    </div>
-                    <button 
-                      onClick={() => copyToClipboard(`Username: ${teacher.username}`, teacher.uid)}
-                      className="text-blue-600 hover:text-blue-700 transition-colors"
-                    >
-                      {copiedId === teacher.uid ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                    </button>
-                  </div>
-                  <div className="grid grid-cols-1 gap-4">
-                    <div>
-                      <p className="text-[10px] text-slate-400 font-bold uppercase">{t('username')}</p>
-                      <p className="text-sm font-mono font-bold text-slate-700">{teacher.username}</p>
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="p-8 bg-slate-50 rounded-2xl border border-dashed border-slate-200 flex flex-col items-center justify-center text-center space-y-2">
-                  <AlertCircle className="w-6 h-6 text-slate-300" />
-                  <p className="text-sm text-slate-400 italic">{t('account_not_activated')}</p>
-                </div>
-              )}
-            </div>
-
               <div className={cn(
-                "bg-slate-50 p-4 md:w-48 border-t md:border-t-0 border-slate-100 flex flex-row md:flex-col gap-2 justify-center",
+                "bg-slate-50/30 p-10 md:w-72 border-t md:border-t-0 border-slate-100 flex flex-row md:flex-col gap-4 justify-center items-stretch",
                 isRTL ? "md:border-r" : "md:border-l"
               )}>
-                <button 
+                <motion.button 
+                  whileHover={{ x: isRTL ? -5 : 5 }}
                   onClick={() => setEditingTeacher(teacher)}
-                  className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2.5 bg-white border border-slate-200 text-slate-600 rounded-xl font-bold hover:bg-slate-50 transition-all text-sm"
+                  className="flex-1 flex items-center justify-center gap-3 px-6 py-4 bg-white border border-slate-200 text-slate-700 rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-blue-50 hover:border-blue-200 hover:text-blue-600 transition-all shadow-sm group/btn"
                 >
-                  <Edit2 className="w-4 h-4" />
-                  {t('edit')}
-                </button>
-                <button 
-                  type="button"
+                  <Edit2 className="w-5 h-5 transition-transform group-hover/btn:scale-110" />
+                  <span>{t('edit')}</span>
+                </motion.button>
+                
+                <motion.button 
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
                   onClick={() => setTeacherToDelete({ uid: teacher.uid, name: teacher.displayName || '' })}
-                  className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2.5 bg-red-50 text-red-600 border border-red-100 rounded-xl font-bold hover:bg-red-100 transition-all text-sm z-10"
+                  className="flex-1 flex items-center justify-center gap-3 px-6 py-4 bg-white border border-slate-200 text-slate-400 rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-red-50 hover:text-red-600 hover:border-red-100 transition-all shadow-sm group/btn"
                 >
-                  <Trash2 className="w-4 h-4" />
-                  {t('delete')}
-                </button>
-                {!teacher.isActive ? (
-                <button 
-                  onClick={() => handleActivate(teacher)}
-                  className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-all text-sm"
-                >
-                  <UserCheck className="w-4 h-4" />
-                  {t('activate')}
-                </button>
-              ) : (
-                <button 
-                  onClick={() => handleDeactivate(teacher.uid)}
-                  className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2.5 bg-red-50 text-red-600 border border-red-100 rounded-xl font-bold hover:bg-red-100 transition-all text-sm"
-                >
-                  <UserX className="w-4 h-4" />
-                  {t('deactivate')}
-                </button>
-              )}
-              {teacher.isActive && (
-                <button 
-                  onClick={() => handleSendEmail(teacher)}
-                  className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2.5 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 transition-all text-sm"
-                >
-                  <Mail className="w-4 h-4" />
-                  {t('send_data')}
-                </button>
-              )}
-              <button className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2.5 bg-white border border-slate-200 text-slate-600 rounded-xl font-bold hover:bg-slate-50 transition-all text-sm">
-                <ExternalLink className="w-4 h-4" />
-                {t('profile')}
-              </button>
-            </div>
-          </div>
-        ))}
+                  <Trash2 className="w-5 h-5 transition-transform group-hover/btn:scale-110" />
+                  <span>{t('delete')}</span>
+                </motion.button>
+              </div>
+            </motion.div>
+          ))}
+        </AnimatePresence>
       </div>
+
       {/* Edit Teacher Modal */}
       {editingTeacher && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -605,7 +481,6 @@ export default function TeacherManagement() {
                 </div>
               </div>
 
-              {/* Specialty Manager Specific Fields */}
               {editingTeacher.role === 'specialty_manager' && (
                 <div className="p-6 bg-blue-50 rounded-3xl border border-blue-100 space-y-4">
                   <h4 className="font-bold text-blue-900 flex items-center gap-2">
@@ -665,16 +540,6 @@ export default function TeacherManagement() {
 
               <div className="pt-4 flex gap-3">
                 <button type="submit" className="flex-1 bg-blue-600 text-white py-3 rounded-xl font-bold hover:bg-blue-700 transition-all">{t('save_changes')}</button>
-                {editingTeacher.isActive && (
-                  <button 
-                    type="button"
-                    onClick={() => handleSendEmail(editingTeacher)}
-                    className="flex-1 flex items-center justify-center gap-2 bg-emerald-600 text-white py-3 rounded-xl font-bold hover:bg-emerald-700 transition-all"
-                  >
-                    <Mail className="w-5 h-5" />
-                    {t('send_data')}
-                  </button>
-                )}
                 <button type="button" onClick={() => setEditingTeacher(null)} className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl font-bold hover:bg-slate-200 transition-all">{t('cancel')}</button>
               </div>
             </form>
@@ -738,6 +603,7 @@ export default function TeacherManagement() {
           </div>
         </div>
       )}
+
       {/* Delete Confirmation Modal */}
       {teacherToDelete && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4">

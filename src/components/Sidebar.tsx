@@ -70,28 +70,28 @@ export default function Sidebar({ activeTab, setActiveTab }: SidebarProps) {
   const filteredItems = menuItems.filter(item => item.roles.includes(user?.role || ''));
 
   return (
-    <aside className={cn("w-64 bg-white border-slate-100 flex flex-col h-screen sticky top-0", isRtl ? "border-l" : "border-r")} dir={isRtl ? "rtl" : "ltr"}>
-      <div className="p-6 border-b border-slate-50">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-blue-100">
-            <BookOpen className="w-6 h-6" />
+    <aside className={cn("w-72 bg-white border-slate-100 flex flex-col h-screen sticky top-0 shadow-sm", isRtl ? "border-l" : "border-r")} dir={isRtl ? "rtl" : "ltr"}>
+      <div className="p-8 border-b border-slate-50">
+        <div className="flex items-center gap-4">
+          <div className="w-12 h-12 bg-blue-600 rounded-2xl flex items-center justify-center text-white shadow-xl shadow-blue-200/50">
+            <BookOpen className="w-7 h-7" />
           </div>
           <div>
-            <h2 className="font-bold text-slate-900 leading-tight">{t('department_management')}</h2>
-            <p className="text-xs text-slate-500">{t('mechanical_engineering')}</p>
+            <h2 className="font-extrabold text-slate-900 leading-tight text-lg">{t('department_management')}</h2>
+            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">{t('mechanical_engineering')}</p>
           </div>
         </div>
       </div>
 
-      <div className="px-6 py-4 border-b border-slate-50">
-        <div className="flex items-center gap-2 bg-slate-50 p-1 rounded-xl">
+      <div className="px-8 py-6">
+        <div className="flex items-center gap-1.5 bg-slate-50 p-1.5 rounded-2xl border border-slate-100">
           {['ar', 'fr', 'en'].map((lng) => (
             <button
               key={lng}
               onClick={() => changeLanguage(lng)}
               className={cn(
-                "flex-1 py-1.5 rounded-lg text-xs font-bold transition-all uppercase",
-                i18n.language === lng ? "bg-white text-blue-600 shadow-sm" : "text-slate-400 hover:text-slate-600"
+                "flex-1 py-2 rounded-xl text-[10px] font-extrabold transition-all uppercase tracking-widest",
+                i18n.language === lng ? "bg-white text-blue-600 shadow-sm border border-slate-100" : "text-slate-400 hover:text-slate-600"
               )}
             >
               {lng}
@@ -100,47 +100,49 @@ export default function Sidebar({ activeTab, setActiveTab }: SidebarProps) {
         </div>
       </div>
 
-      <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
+      <nav className="flex-1 px-4 py-2 space-y-1 overflow-y-auto custom-scrollbar">
         {filteredItems.map((item) => (
           <button
             key={item.id}
             onClick={() => setActiveTab(item.id)}
             className={cn(
-              "w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all group",
+              "w-full flex items-center justify-between px-4 py-3.5 rounded-2xl transition-all duration-200 group relative",
               activeTab === item.id 
-                ? "bg-blue-50 text-blue-600" 
-                : "text-slate-600 hover:bg-slate-50"
+                ? "bg-blue-50/50 text-blue-600 font-bold" 
+                : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
             )}
           >
-            <div className="flex items-center gap-3">
-              <item.icon className={cn("w-5 h-5", activeTab === item.id ? "text-blue-600" : "text-slate-400 group-hover:text-slate-600")} />
-              <span className="font-medium">{item.label}</span>
+            <div className="flex items-center gap-3.5">
+              <item.icon className={cn("w-5 h-5 transition-colors", activeTab === item.id ? "text-blue-600" : "text-slate-400 group-hover:text-slate-600")} />
+              <span className="text-sm">{item.label}</span>
             </div>
-            {activeTab === item.id && (isRtl ? <ChevronLeft className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />)}
+            {activeTab === item.id && (
+              <div className={cn("absolute w-1 h-6 bg-blue-600 rounded-full", isRtl ? "-left-1" : "-right-1")} />
+            )}
           </button>
         ))}
 
         {(isAdmin || user?.email === 't.mansouri@lagh-univ.dz') && (
-          <div className="pt-4 mt-4 border-t border-slate-50">
+          <div className="pt-6 mt-6 border-t border-slate-50 px-2">
             <button
               onClick={handleSeed}
               disabled={seeding}
-              className="w-full flex items-center gap-3 px-4 py-3 text-orange-600 hover:bg-orange-50 rounded-xl transition-all font-bold animate-pulse"
+              className="w-full flex items-center gap-3 px-4 py-3.5 text-orange-600 hover:bg-orange-50 rounded-2xl transition-all font-bold text-sm group"
             >
-              <RefreshCw className={cn("w-5 h-5", seeding ? "animate-spin" : "")} />
+              <RefreshCw className={cn("w-4 h-4 transition-transform duration-500", seeding ? "animate-spin" : "group-hover:rotate-180")} />
               <span>{seeding ? t('generating') : t('generate_data')}</span>
             </button>
           </div>
         )}
       </nav>
 
-      <div className="p-4 border-t border-slate-50">
+      <div className="p-6 border-t border-slate-50">
         <button
           onClick={() => auth.signOut()}
-          className="w-full flex items-center gap-3 px-4 py-3 text-red-600 hover:bg-red-50 rounded-xl transition-all"
+          className="w-full flex items-center gap-3 px-4 py-3.5 text-slate-500 hover:bg-red-50 hover:text-red-600 rounded-2xl transition-all font-bold text-sm"
         >
           <LogOut className="w-5 h-5" />
-          <span className="font-medium">{t('logout')}</span>
+          <span>{t('logout')}</span>
         </button>
       </div>
     </aside>

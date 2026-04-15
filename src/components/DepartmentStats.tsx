@@ -207,7 +207,7 @@ export default function DepartmentStats() {
       }
     };
     fetchData();
-  }, []);
+  }, [selectedYear]);
 
   const handleSaveStats = async (e: React.FormEvent) => {
     e.preventDefault();

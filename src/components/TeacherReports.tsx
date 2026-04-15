@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { collection, getDocs, addDoc, updateDoc, doc, query, where, orderBy, onSnapshot } from 'firebase/firestore';
+import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, query, where, orderBy, onSnapshot } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { TeacherReport, User } from '../types';
 import { 
   MessageSquare, Plus, Send, Clock, CheckCircle2, 
-  AlertCircle, X, User as UserIcon, Filter, Search
+  AlertCircle, X, User as UserIcon, Filter, Search, Trash2
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useAuth } from '../contexts/AuthContext';
@@ -25,6 +25,7 @@ export default function TeacherReports() {
   const [filterStatus, setFilterStatus] = useState<TeacherReport['status'] | 'All'>('All');
   const [respondingTo, setRespondingTo] = useState<string | null>(null);
   const [adminResponse, setAdminResponse] = useState('');
+  const [itemToDelete, setItemToDelete] = useState<string | null>(null);
 
   useEffect(() => {
     if (!user) return;
@@ -109,6 +110,16 @@ export default function TeacherReports() {
       toast.success(t('status_updated', 'تم تحديث حالة البلاغ'));
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, 'teacherReports/' + reportId);
+    }
+  };
+
+  const handleDeleteReport = async (reportId: string) => {
+    try {
+      await deleteDoc(doc(db, 'teacherReports', reportId));
+      setItemToDelete(null);
+      toast.success('تم حذف البلاغ بنجاح');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, 'teacherReports/' + reportId);
     }
   };
 
@@ -247,25 +258,36 @@ export default function TeacherReports() {
                             </button>
                           </div>
                         </div>
-                      ) : report.status !== 'Resolved' && (
+                      ) : (
                         <div className="flex gap-2">
-                          <button 
-                            onClick={() => {
-                              setRespondingTo(report.id);
-                              setAdminResponse(report.response || '');
-                            }}
-                            className="flex-1 bg-emerald-600 text-white py-2 rounded-xl text-sm font-bold hover:bg-emerald-700 transition-all"
-                          >
-                            {report.response ? t('edit_response', 'تعديل الرد') : t('add_response', 'إضافة رد وحل')}
-                          </button>
-                          {report.status === 'Pending' && (
-                            <button 
-                              onClick={() => handleUpdateStatus(report.id, 'InProgress')}
-                              className="flex-1 bg-blue-600 text-white py-2 rounded-xl text-sm font-bold hover:bg-blue-700 transition-all"
-                            >
-                              {t('start_processing', 'بدء المعالجة')}
-                            </button>
+                          {report.status !== 'Resolved' && (
+                            <>
+                              <button 
+                                onClick={() => {
+                                  setRespondingTo(report.id);
+                                  setAdminResponse(report.response || '');
+                                }}
+                                className="flex-1 bg-emerald-600 text-white py-2 rounded-xl text-sm font-bold hover:bg-emerald-700 transition-all"
+                              >
+                                {report.response ? t('edit_response', 'تعديل الرد') : t('add_response', 'إضافة رد وحل')}
+                              </button>
+                              {report.status === 'Pending' && (
+                                <button 
+                                  onClick={() => handleUpdateStatus(report.id, 'InProgress')}
+                                  className="flex-1 bg-blue-600 text-white py-2 rounded-xl text-sm font-bold hover:bg-blue-700 transition-all"
+                                >
+                                  {t('start_processing', 'بدء المعالجة')}
+                                </button>
+                              )}
+                            </>
                           )}
+                          <button 
+                            onClick={() => setItemToDelete(report.id)}
+                            className="px-4 bg-red-50 text-red-600 py-2 rounded-xl text-sm font-bold hover:bg-red-600 hover:text-white transition-all"
+                            title={t('delete', 'حذف')}
+                          >
+                            <Trash2 className="w-5 h-5" />
+                          </button>
                         </div>
                       )}
                     </div>
@@ -311,6 +333,35 @@ export default function TeacherReports() {
                 <button type="button" onClick={() => setShowAddModal(false)} className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl font-bold hover:bg-slate-200 transition-all">{t('cancel')}</button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {itemToDelete && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl p-8 text-center space-y-6">
+            <div className="w-20 h-20 bg-red-50 rounded-full flex items-center justify-center mx-auto">
+              <Trash2 className="w-10 h-10 text-red-600" />
+            </div>
+            <div className="space-y-2">
+              <h3 className="text-xl font-bold text-slate-900">تأكيد الحذف</h3>
+              <p className="text-slate-500">هل أنت متأكد من حذف هذا البلاغ؟ لا يمكن التراجع عن هذا الإجراء.</p>
+            </div>
+            <div className="flex gap-3">
+              <button 
+                onClick={() => handleDeleteReport(itemToDelete)}
+                className="flex-1 bg-red-600 text-white py-3 rounded-xl font-bold hover:bg-red-700 transition-all"
+              >
+                نعم، احذف
+              </button>
+              <button 
+                onClick={() => setItemToDelete(null)}
+                className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl font-bold hover:bg-slate-200 transition-all"
+              >
+                إلغاء
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -26,6 +26,7 @@ export interface User {
   username?: string;
   password?: string;
   lastEmailSent?: string | null;
+  photoURL?: string;
 }
 
 export interface MonthlyHours {
@@ -223,7 +224,7 @@ export interface PedagogicalCalendar {
   s1End: string;
   s2Start: string;
   s2End: string;
-  excludedDays: string[]; // Keep for backward compatibility
+  excludedDays?: string[]; // Keep for backward compatibility
   events?: CalendarEvent[];
 }
 

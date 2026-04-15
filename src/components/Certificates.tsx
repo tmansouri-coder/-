@@ -81,7 +81,7 @@ export default function Certificates() {
     }
 
     return () => unsubscribe();
-  }, [user, isAdmin, isViceAdmin]);
+  }, [user, isAdmin, isViceAdmin, selectedYear]);
 
   const handleAddYear = () => {
     setTeachingData(prev => ({

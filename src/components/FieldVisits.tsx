@@ -1,17 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { collection, getDocs, addDoc, updateDoc, doc, query, where, orderBy } from 'firebase/firestore';
+import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, query, where, orderBy } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { FieldVisit, Specialty, Level, Module, User, Cycle } from '../types';
 import { 
   Bus, Plus, Search, Filter, Calendar, User as UserIcon, 
   CheckCircle2, Clock, AlertCircle, X, MapPin,
-  Building2, Users, FileText, MoreVertical
+  Building2, Users, FileText, MoreVertical, Trash2
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useAuth } from '../contexts/AuthContext';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
 import toast from 'react-hot-toast';
 import { useNotifications } from '../contexts/NotificationContext';
+import { motion, AnimatePresence } from 'motion/react';
 
 export default function FieldVisits() {
   const { user, isAdmin, isViceAdmin, isSpecialtyManager, isTeacher } = useAuth();
@@ -26,6 +27,7 @@ export default function FieldVisits() {
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   const [filterStatus, setFilterStatus] = useState<FieldVisit['status'] | 'All'>('All');
+  const [itemToDelete, setItemToDelete] = useState<string | null>(null);
 
   // Form states
   const [selectedCycle, setSelectedCycle] = useState('');
@@ -132,12 +134,23 @@ export default function FieldVisits() {
     }
   };
 
+  const handleDeleteVisit = async (visitId: string) => {
+    try {
+      await deleteDoc(doc(db, 'fieldVisits', visitId));
+      setVisits(prev => prev.filter(v => v.id !== visitId));
+      setItemToDelete(null);
+      toast.success('تم حذف الطلب بنجاح');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, 'fieldVisits/' + visitId);
+    }
+  };
+
   const filteredVisits = visits.filter(v => {
     const matchesStatus = filterStatus === 'All' || v.status === filterStatus;
     
     if (isAdmin || isViceAdmin) return matchesStatus;
     if (isSpecialtyManager) {
-      return matchesStatus && user?.specialtyIds?.includes(v.specialtyId);
+      return matchesStatus && (user?.specialtyIds?.includes(v.specialtyId) || v.teacherId === user?.uid);
     }
     return matchesStatus && v.teacherId === user?.uid;
   });
@@ -145,74 +158,79 @@ export default function FieldVisits() {
   if (loading) return <div className="p-8 text-center">جاري التحميل...</div>;
 
   return (
-    <div className="space-y-8" dir="rtl">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900">طلبات الزيارات الميدانية</h1>
-          <p className="text-slate-500">تنظيم ومتابعة الزيارات العلمية للمؤسسات الصناعية</p>
+    <div className="space-y-10 pb-12" dir="rtl">
+      {/* Header Section */}
+      <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
+        <div className="space-y-1">
+          <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">طلبات الزيارات الميدانية</h1>
+          <p className="text-slate-500 font-medium">تنظيم ومتابعة الزيارات العلمية للمؤسسات الصناعية</p>
         </div>
-        {isTeacher && (
+        {(isTeacher || isSpecialtyManager) && (
           <button 
             onClick={() => setShowAddModal(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-all shadow-lg shadow-blue-100"
+            className="btn-primary flex items-center gap-2"
           >
-            <Plus className="w-4 h-4" />
+            <Plus className="w-5 h-5" />
             <span>طلب زيارة جديدة</span>
           </button>
         )}
       </div>
 
-      {/* Stats & Filters */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="md:col-span-3 flex gap-2 overflow-x-auto pb-2">
-          {['All', 'Pending', 'Approved', 'Rejected'].map((status) => (
-            <button
-              key={status}
-              onClick={() => setFilterStatus(status as any)}
-              className={cn(
-                "px-4 py-2 rounded-xl text-sm font-bold transition-all whitespace-nowrap border",
-                filterStatus === status 
-                  ? "bg-blue-600 text-white border-blue-600 shadow-lg shadow-blue-100" 
-                  : "bg-white text-slate-500 border-slate-200 hover:border-blue-200"
-              )}
-            >
-              {status === 'All' ? 'الكل' : status === 'Pending' ? 'قيد الانتظار' : status === 'Approved' ? 'مقبولة' : 'مرفوضة'}
-            </button>
-          ))}
-        </div>
+      {/* Filters Bento */}
+      <div className="bg-white p-2 rounded-3xl border border-slate-100 shadow-sm flex flex-wrap gap-2">
+        {['All', 'Pending', 'Approved', 'Rejected'].map((status) => (
+          <button
+            key={status}
+            onClick={() => setFilterStatus(status as any)}
+            className={cn(
+              "px-6 py-3 rounded-2xl text-sm font-black transition-all whitespace-nowrap uppercase tracking-widest",
+              filterStatus === status 
+                ? "bg-blue-600 text-white shadow-xl shadow-blue-100" 
+                : "bg-transparent text-slate-500 hover:bg-slate-50"
+            )}
+          >
+            {status === 'All' ? 'الكل' : status === 'Pending' ? 'قيد الانتظار' : status === 'Approved' ? 'مقبولة' : 'مرفوضة'}
+          </button>
+        ))}
       </div>
 
-      {/* Visits List */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {filteredVisits.map((visit) => {
+      {/* Visits Grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        {filteredVisits.map((visit, i) => {
           const specialty = specialties.find(s => s.id === visit.specialtyId);
           const level = levels.find(l => l.id === visit.levelId);
           const module = modules.find(m => m.id === visit.moduleId);
           const teacher = teachers.find(t => t.uid === visit.teacherId);
 
           return (
-            <div key={visit.id} className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden hover:shadow-md transition-all group">
-              <div className="p-6 space-y-4">
+            <motion.div 
+              key={visit.id}
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: i * 0.05 }}
+              className="group bg-white rounded-4xl border border-slate-100 shadow-sm hover:shadow-2xl hover:shadow-slate-200/50 transition-all duration-500 overflow-hidden"
+            >
+              <div className="p-8 space-y-6">
                 <div className="flex items-start justify-between">
-                  <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-5">
                     <div className={cn(
-                      "w-12 h-12 rounded-2xl flex items-center justify-center",
+                      "w-16 h-16 rounded-3xl flex items-center justify-center transition-transform duration-500 group-hover:scale-110",
                       visit.status === 'Approved' ? "bg-emerald-50 text-emerald-600" :
                       visit.status === 'Rejected' ? "bg-red-50 text-red-600" :
                       "bg-amber-50 text-amber-600"
                     )}>
-                      <Building2 className="w-6 h-6" />
+                      <Building2 className="w-8 h-8" />
                     </div>
                     <div>
-                      <h3 className="font-bold text-slate-900">{visit.destination}</h3>
-                      <div className="flex items-center gap-2 text-xs text-slate-500 mt-1">
-                        <Calendar className="w-3 h-3" />
+                      <h3 className="text-xl font-extrabold text-slate-900 tracking-tight group-hover:text-blue-600 transition-colors">{visit.destination}</h3>
+                      <div className="flex items-center gap-2 text-sm text-slate-400 font-bold mt-1">
+                        <Calendar className="w-4 h-4" />
                         <span>{visit.proposedDate}</span>
                       </div>
                     </div>
                   </div>
                   <div className={cn(
-                    "px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider",
+                    "px-4 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest",
                     visit.status === 'Approved' ? "bg-emerald-100 text-emerald-700" :
                     visit.status === 'Rejected' ? "bg-red-100 text-red-700" :
                     "bg-amber-100 text-amber-700"
@@ -221,61 +239,81 @@ export default function FieldVisits() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4 py-4 border-y border-slate-50">
-                  <div className="space-y-1">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase">المقياس والتخصص</span>
-                    <p className="text-sm font-bold text-slate-700">{module?.name || '---'}</p>
-                    <p className="text-xs text-slate-500">{specialty?.name} - {level?.name}</p>
+                <div className="grid grid-cols-2 gap-6 p-6 bg-slate-50 rounded-3xl border border-slate-100">
+                  <div className="space-y-2">
+                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">المقياس والتخصص</span>
+                    <p className="text-sm font-extrabold text-slate-700 leading-tight">{module?.name || '---'}</p>
+                    <p className="text-xs font-bold text-slate-500">{specialty?.name} • {level?.name}</p>
                   </div>
-                  <div className="space-y-1">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase">تعداد الطلبة</span>
+                  <div className="space-y-2">
+                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">تعداد الطلبة</span>
                     <div className="flex items-center gap-2">
-                      <Users className="w-4 h-4 text-blue-600" />
-                      <p className="text-sm font-bold text-slate-700">{visit.studentCount} طالب</p>
+                      <div className="w-8 h-8 rounded-xl bg-blue-100 flex items-center justify-center text-blue-600">
+                        <Users className="w-4 h-4" />
+                      </div>
+                      <p className="text-lg font-black text-slate-900">{visit.studentCount} <span className="text-xs text-slate-400 font-bold">طالب</span></p>
                     </div>
                   </div>
                 </div>
 
-                <div className="space-y-2">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase">المرافقون</span>
+                <div className="space-y-3">
+                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                    <FileText className="w-3.5 h-3.5" /> المرافقون
+                  </span>
                   <div className="flex flex-wrap gap-2">
                     {visit.supervisors.map((s, i) => (
-                      <span key={i} className="px-2 py-1 bg-slate-50 text-slate-600 rounded-lg text-xs font-medium border border-slate-100">
+                      <span key={i} className="px-4 py-2 bg-white border border-slate-100 text-slate-600 rounded-2xl text-xs font-bold shadow-sm group-hover:border-blue-100 transition-colors">
                         {s}
                       </span>
                     ))}
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between pt-2">
-                  <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500">
-                      <UserIcon className="w-4 h-4" />
+                <div className="flex items-center justify-between pt-4 border-t border-slate-50">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-2xl bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-400 group-hover:bg-blue-50 group-hover:border-blue-100 group-hover:text-blue-500 transition-all">
+                      <UserIcon className="w-5 h-5" />
                     </div>
-                    <span className="text-xs font-bold text-slate-600">{teacher?.displayName}</span>
+                    <div>
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none mb-1">صاحب الطلب</p>
+                      <p className="text-sm font-black text-slate-700">{teacher?.displayName}</p>
+                    </div>
                   </div>
                   
-                  {(isAdmin || isViceAdmin || isSpecialtyManager) && visit.status === 'Pending' && (
+                  {(isAdmin || isViceAdmin || isSpecialtyManager) && (
                     <div className="flex gap-2">
-                      <button 
-                        onClick={() => handleUpdateStatus(visit.id, 'Approved')}
-                        className="p-2 bg-emerald-50 text-emerald-600 rounded-xl hover:bg-emerald-100 transition-all"
-                        title="قبول"
-                      >
-                        <CheckCircle2 className="w-5 h-5" />
-                      </button>
-                      <button 
-                        onClick={() => handleUpdateStatus(visit.id, 'Rejected')}
-                        className="p-2 bg-red-50 text-red-600 rounded-xl hover:bg-red-100 transition-all"
-                        title="رفض"
-                      >
-                        <X className="w-5 h-5" />
-                      </button>
+                      {visit.status === 'Pending' && (
+                        <>
+                          <button 
+                            onClick={() => handleUpdateStatus(visit.id, 'Approved')}
+                            className="w-12 h-12 flex items-center justify-center bg-emerald-50 text-emerald-600 rounded-2xl hover:bg-emerald-600 hover:text-white transition-all shadow-sm"
+                            title="قبول"
+                          >
+                            <CheckCircle2 className="w-6 h-6" />
+                          </button>
+                          <button 
+                            onClick={() => handleUpdateStatus(visit.id, 'Rejected')}
+                            className="w-12 h-12 flex items-center justify-center bg-red-50 text-red-600 rounded-2xl hover:bg-red-600 hover:text-white transition-all shadow-sm"
+                            title="رفض"
+                          >
+                            <X className="w-6 h-6" />
+                          </button>
+                        </>
+                      )}
+                      {(isAdmin || isViceAdmin) && (
+                        <button 
+                          onClick={() => setItemToDelete(visit.id)}
+                          className="w-12 h-12 flex items-center justify-center bg-slate-50 text-slate-400 rounded-2xl hover:bg-red-600 hover:text-white transition-all shadow-sm"
+                          title="حذف"
+                        >
+                          <Trash2 className="w-6 h-6" />
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
               </div>
-            </div>
+            </motion.div>
           );
         })}
       </div>
@@ -468,6 +506,35 @@ export default function FieldVisits() {
                 <button type="button" onClick={() => setShowAddModal(false)} className="flex-1 bg-slate-100 text-slate-600 py-4 rounded-2xl font-bold hover:bg-slate-200 transition-all">إلغاء</button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {itemToDelete && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl p-8 text-center space-y-6">
+            <div className="w-20 h-20 bg-red-50 rounded-full flex items-center justify-center mx-auto">
+              <Trash2 className="w-10 h-10 text-red-600" />
+            </div>
+            <div className="space-y-2">
+              <h3 className="text-xl font-bold text-slate-900">تأكيد الحذف</h3>
+              <p className="text-slate-500">هل أنت متأكد من حذف هذا الطلب؟ لا يمكن التراجع عن هذا الإجراء.</p>
+            </div>
+            <div className="flex gap-3">
+              <button 
+                onClick={() => handleDeleteVisit(itemToDelete)}
+                className="flex-1 bg-red-600 text-white py-3 rounded-xl font-bold hover:bg-red-700 transition-all"
+              >
+                نعم، احذف
+              </button>
+              <button 
+                onClick={() => setItemToDelete(null)}
+                className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl font-bold hover:bg-slate-200 transition-all"
+              >
+                إلغاء
+              </button>
+            </div>
           </div>
         </div>
       )}

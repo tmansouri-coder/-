@@ -25,6 +25,7 @@ export default function OvertimeCalc() {
   const [editingRequest, setEditingRequest] = useState<OvertimeRequest | null>(null);
   const [filterSemester, setFilterSemester] = useState<'All' | 'S1' | 'S2'>('All');
   const [monthlyInputs, setMonthlyInputs] = useState<{ month: string, hours: number }[]>([]);
+  const [itemToDelete, setItemToDelete] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -54,7 +55,7 @@ export default function OvertimeCalc() {
       }
     };
     fetchData();
-  }, []);
+  }, [selectedYear]);
 
   const getMonthsInSemester = (semester: 'S1' | 'S2') => {
     if (!calendar) return [];
@@ -163,14 +164,19 @@ export default function OvertimeCalc() {
     }
   };
 
-  const handleDeleteRequest = async (id: string) => {
-    if (!window.confirm('هل أنت متأكد من حذف هذا الطلب؟')) return;
+  const handleDeleteRequest = (id: string) => {
+    setItemToDelete(id);
+  };
+
+  const confirmDelete = async () => {
+    if (!itemToDelete) return;
     try {
-      await deleteDoc(doc(db, 'overtimeRequests', id));
-      setOvertimeRequests(prev => prev.filter(r => r.id !== id));
+      await deleteDoc(doc(db, 'overtimeRequests', itemToDelete));
+      setOvertimeRequests(prev => prev.filter(r => r.id !== itemToDelete));
       toast.success('تم حذف الطلب');
+      setItemToDelete(null);
     } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, `overtimeRequests/${id}`);
+      handleFirestoreError(err, OperationType.DELETE, `overtimeRequests/${itemToDelete}`);
     }
   };
 
@@ -545,6 +551,35 @@ export default function OvertimeCalc() {
           </p>
         </div>
       </div>
+
+      {/* Delete Confirmation Modal */}
+      {itemToDelete && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl p-8 text-center space-y-6">
+            <div className="w-20 h-20 bg-red-50 rounded-full flex items-center justify-center mx-auto">
+              <Trash2 className="w-10 h-10 text-red-600" />
+            </div>
+            <div className="space-y-2">
+              <h3 className="text-2xl font-black text-slate-900">تأكيد الحذف</h3>
+              <p className="text-slate-500 font-medium">هل أنت متأكد من حذف هذا الطلب؟ لا يمكن التراجع عن هذا الإجراء.</p>
+            </div>
+            <div className="flex gap-3 pt-2">
+              <button 
+                onClick={confirmDelete}
+                className="flex-1 bg-red-600 text-white py-4 rounded-2xl font-black hover:bg-red-700 transition-all shadow-lg shadow-red-100"
+              >
+                تأكيد الحذف
+              </button>
+              <button 
+                onClick={() => setItemToDelete(null)}
+                className="flex-1 bg-slate-100 text-slate-600 py-4 rounded-2xl font-black hover:bg-slate-200 transition-all"
+              >
+                إلغاء
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

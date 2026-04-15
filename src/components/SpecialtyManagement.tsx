@@ -250,27 +250,28 @@ export default function SpecialtyManagement() {
   });
 
   return (
-    <div className="space-y-8" dir="rtl">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900">بوابة التخصصات</h1>
-          <p className="text-slate-500">تصفح التخصصات والمقاييس حسب الأطوار الأكاديمية</p>
+    <div className="space-y-10 pb-12" dir="rtl">
+      {/* Header Section */}
+      <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
+        <div className="space-y-1">
+          <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">بوابة التخصصات</h1>
+          <p className="text-slate-500 font-medium">تصفح التخصصات، المقاييس، وقوائم الطلبة حسب الأطوار الأكاديمية</p>
         </div>
         
-        <div className="flex items-center gap-3">
-          <div className="relative max-w-md w-full">
-            <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+        <div className="flex flex-wrap items-center gap-4">
+          <div className="relative group">
+            <Search className="absolute right-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-300 transition-colors group-focus-within:text-blue-500" />
             <input 
               type="text" 
               placeholder="بحث عن تخصص..." 
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pr-10 pl-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 transition-all shadow-sm"
+              className="w-full md:w-80 pr-12 pl-6 py-3.5 bg-white border border-slate-100 rounded-2xl text-sm font-medium focus:outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all shadow-sm"
             />
           </div>
           <button 
             onClick={fetchData}
-            className="p-2.5 bg-white border border-slate-200 rounded-xl text-slate-500 hover:text-blue-600 transition-all shadow-sm"
+            className="w-12 h-12 bg-white border border-slate-100 rounded-2xl flex items-center justify-center text-slate-400 hover:text-blue-600 hover:border-blue-100 transition-all shadow-sm"
             title="تحديث البيانات"
           >
             <RefreshCw className={cn("w-5 h-5", loading && "animate-spin")} />
@@ -278,13 +279,15 @@ export default function SpecialtyManagement() {
         </div>
       </div>
 
-      {/* Cycle Tabs */}
-      <div className="flex flex-wrap gap-2 p-1 bg-slate-100 rounded-2xl w-fit max-w-full">
+      {/* Cycle Tabs Bento */}
+      <div className="bg-white p-2 rounded-3xl border border-slate-100 shadow-sm flex flex-wrap gap-2 w-fit">
         <button
           onClick={() => setActiveCycle('all')}
           className={cn(
-            "flex items-center gap-2 px-6 py-2.5 rounded-xl font-bold transition-all whitespace-nowrap",
-            activeCycle === 'all' ? "bg-white text-blue-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
+            "flex items-center gap-2 px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-widest transition-all whitespace-nowrap",
+            activeCycle === 'all' 
+              ? "bg-blue-600 text-white shadow-lg shadow-blue-200" 
+              : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
           )}
         >
           <Filter className="w-4 h-4" />
@@ -295,8 +298,10 @@ export default function SpecialtyManagement() {
             key={cycle.id}
             onClick={() => setActiveCycle(cycle.id)}
             className={cn(
-              "flex items-center gap-2 px-6 py-2.5 rounded-xl font-bold transition-all whitespace-nowrap",
-              activeCycle === cycle.id ? "bg-white text-blue-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
+              "flex items-center gap-2 px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-widest transition-all whitespace-nowrap",
+              activeCycle === cycle.id 
+                ? "bg-blue-600 text-white shadow-lg shadow-blue-200" 
+                : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
             )}
           >
             <Layers className="w-4 h-4" />
@@ -305,10 +310,10 @@ export default function SpecialtyManagement() {
         ))}
       </div>
 
-      {/* Specialties List */}
-      <div className="grid grid-cols-1 gap-6">
+      {/* Specialties Grid */}
+      <div className="grid grid-cols-1 gap-8">
         {filteredSpecialties.length > 0 ? (
-          filteredSpecialties.map((specialty) => {
+          filteredSpecialties.map((specialty, i) => {
             const isExpanded = expandedSpecialties.has(specialty.id);
             const specModules = modules.filter(m => m.specialtyId === specialty.id);
             const specStudents = students.filter(s => s.specialtyId === specialty.id);
@@ -320,47 +325,47 @@ export default function SpecialtyManagement() {
             return (
               <motion.div 
                 key={specialty.id}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: i * 0.05 }}
                 layout
-                className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden"
+                className="bg-white rounded-4xl border border-slate-100 shadow-sm hover:shadow-xl transition-all duration-500 overflow-hidden group"
               >
                 <div 
                   onClick={() => toggleSpecialty(specialty.id)}
-                  className="p-6 flex items-center justify-between cursor-pointer hover:bg-slate-50 transition-colors"
+                  className="p-8 flex flex-col md:flex-row md:items-center justify-between cursor-pointer hover:bg-slate-50/50 transition-colors gap-6"
                 >
-                  <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center">
-                      <GraduationCap className="w-6 h-6" />
+                  <div className="flex items-center gap-6">
+                    <div className="w-16 h-16 rounded-3xl bg-blue-50 text-blue-600 flex items-center justify-center group-hover:bg-blue-600 group-hover:text-white transition-all duration-500 shadow-sm">
+                      <GraduationCap className="w-8 h-8" />
                     </div>
                     <div>
-                      <h3 className="text-lg font-bold text-slate-900">{specialty.name}</h3>
-                      <div className="flex items-center gap-2 mt-1">
+                      <h3 className="text-2xl font-black text-slate-900 tracking-tight mb-1">{specialty.name}</h3>
+                      <div className="flex flex-wrap items-center gap-3">
                         {specialty.field && (
-                          <>
-                            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">{specialty.field}</span>
-                            <span className="w-1 h-1 rounded-full bg-slate-300"></span>
-                          </>
+                          <span className="px-3 py-1 rounded-lg bg-slate-100 text-[10px] font-black text-slate-500 uppercase tracking-widest">{specialty.field}</span>
                         )}
-                        <span className="text-xs font-medium text-slate-500">{level?.name}</span>
+                        <span className="text-sm font-extrabold text-blue-600 uppercase tracking-tight">{level?.name}</span>
                       </div>
                     </div>
                   </div>
                   
-                  <div className="flex items-center gap-4">
-                    <div className="hidden sm:flex items-center gap-6 text-xs font-bold">
+                  <div className="flex items-center gap-8">
+                    <div className="flex items-center gap-10">
                       <div className="flex flex-col items-center">
-                        <span className="text-slate-900">{specModules.length}</span>
-                        <span className="text-slate-400">مقاييس</span>
+                        <span className="text-2xl font-black text-slate-900 leading-none mb-1">{specModules.length}</span>
+                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">مقاييس</span>
                       </div>
                       <div className="flex flex-col items-center">
-                        <span className="text-blue-600">{specStudents.length}</span>
-                        <span className="text-slate-400">طلبة</span>
+                        <span className="text-2xl font-black text-blue-600 leading-none mb-1">{specStudents.length}</span>
+                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">طلبة</span>
                       </div>
                     </div>
                     <div className={cn(
-                      "w-8 h-8 rounded-full flex items-center justify-center transition-transform",
-                      isExpanded ? "rotate-180 bg-blue-50 text-blue-600" : "bg-slate-50 text-slate-400"
+                      "w-12 h-12 rounded-2xl flex items-center justify-center transition-all duration-500",
+                      isExpanded ? "rotate-180 bg-blue-600 text-white shadow-lg shadow-blue-200" : "bg-slate-50 text-slate-400 group-hover:bg-slate-100"
                     )}>
-                      <ChevronDown className="w-5 h-5" />
+                      <ChevronDown className="w-6 h-6" />
                     </div>
                   </div>
                 </div>
@@ -373,102 +378,105 @@ export default function SpecialtyManagement() {
                       exit={{ height: 0, opacity: 0 }}
                       className="overflow-hidden"
                     >
-                      <div className="p-6 pt-0 border-t border-slate-50">
-                        <div className="flex items-center justify-between mb-6">
+                      <div className="p-8 pt-0 border-t border-slate-50">
+                        <div className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
                           <div className="flex items-center gap-4">
-                            <h4 className="text-sm font-bold text-slate-900">المقاييس والطلبة</h4>
-                            {(isAdmin || isViceAdmin) && (
-                              <button 
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setShowStudentModal(specialty);
-                                }}
-                                className="flex items-center gap-2 px-4 py-1.5 bg-blue-50 text-blue-600 rounded-xl text-xs font-bold hover:bg-blue-100 transition-all"
-                              >
-                                <Users className="w-3.5 h-3.5" />
-                                إدارة الطلبة
-                              </button>
-                            )}
+                            <div className="w-1.5 h-8 bg-blue-600 rounded-full"></div>
+                            <h4 className="text-lg font-black text-slate-900 tracking-tight">المقاييس والطلبة</h4>
                           </div>
+                          {(isAdmin || isViceAdmin) && (
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setShowStudentModal(specialty);
+                              }}
+                              className="flex items-center gap-2 px-6 py-3 bg-blue-50 text-blue-600 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-blue-600 hover:text-white transition-all shadow-sm"
+                            >
+                              <Users className="w-4 h-4" />
+                              <span>إدارة الطلبة</span>
+                            </button>
+                          )}
                         </div>
 
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
                           {/* Semester 1 */}
-                          <div className="space-y-4">
-                            <div className="flex items-center justify-between">
-                              <h4 className="text-sm font-bold text-emerald-600 flex items-center gap-2">
-                                <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
-                                السداسي الأول (S1)
-                              </h4>
-                              <div className="flex items-center gap-2">
-                                <span className="text-[10px] font-bold text-slate-400 uppercase">{s1Modules.length} مقاييس</span>
+                          <div className="space-y-6">
+                            <div className="flex items-center justify-between bg-emerald-50/50 p-4 rounded-2xl border border-emerald-100">
+                              <div className="flex items-center gap-3">
+                                <div className="w-8 h-8 rounded-xl bg-emerald-500 text-white flex items-center justify-center shadow-sm">
+                                  <BookOpen className="w-4 h-4" />
+                                </div>
+                                <h4 className="text-sm font-black text-emerald-900 uppercase tracking-tight">السداسي الأول (S1)</h4>
+                              </div>
+                              <div className="flex items-center gap-3">
+                                <span className="text-[10px] font-black text-emerald-600 uppercase tracking-widest">{s1Modules.length} مقاييس</span>
                                 {(isAdmin || isViceAdmin) && (
                                   <button 
                                     onClick={() => setShowModuleModal({ specialtyId: specialty.id, semester: 'S1' })}
-                                    className="p-1 bg-emerald-50 text-emerald-600 rounded-lg hover:bg-emerald-100 transition-all"
+                                    className="w-8 h-8 bg-white text-emerald-600 rounded-xl flex items-center justify-center hover:bg-emerald-500 hover:text-white transition-all shadow-sm"
                                     title="إضافة مقياس"
                                   >
-                                    <Plus className="w-3 h-3" />
+                                    <Plus className="w-4 h-4" />
                                   </button>
                                 )}
                               </div>
                             </div>
-                            <div className="space-y-2">
+                            <div className="space-y-3">
                               {s1Modules.length > 0 ? s1Modules.map(module => (
-                                <div key={module.id} className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-100 group/module">
-                                  <div className="flex items-center gap-3">
-                                    <BookOpen className="w-4 h-4 text-slate-400" />
-                                    <span className="text-sm font-medium text-slate-700">{module.name}</span>
-                                  </div>
+                                <div key={module.id} className="flex items-center justify-between p-4 rounded-2xl bg-white border border-slate-100 group/module hover:shadow-md hover:shadow-slate-200/50 transition-all duration-300">
+                                  <span className="text-sm font-extrabold text-slate-700">{module.name}</span>
                                   {(isAdmin || isViceAdmin) && (
-                                    <div className="flex gap-1 opacity-0 group-hover/module:opacity-100 transition-opacity">
-                                      <button onClick={() => setEditingModule(module)} className="p-1 hover:bg-white rounded-lg text-slate-400"><Edit2 className="w-3 h-3" /></button>
-                                      <button onClick={() => handleDeleteModule(module.id)} className="p-1 hover:bg-white rounded-lg text-red-600"><Trash2 className="w-3 h-3" /></button>
+                                    <div className="flex gap-1 opacity-0 group-hover/module:opacity-100 transition-all">
+                                      <button onClick={() => setEditingModule(module)} className="p-2 hover:bg-slate-50 rounded-xl text-slate-400 hover:text-blue-600 transition-colors"><Edit2 className="w-4 h-4" /></button>
+                                      <button onClick={() => handleDeleteModule(module.id)} className="p-2 hover:bg-slate-50 rounded-xl text-red-600 transition-colors"><Trash2 className="w-4 h-4" /></button>
                                     </div>
                                   )}
                                 </div>
                               )) : (
-                                <p className="text-xs text-slate-400 italic py-2">لا توجد مقاييس مسجلة</p>
+                                <div className="py-6 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+                                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">لا توجد مقاييس مسجلة</p>
+                                </div>
                               )}
                             </div>
                           </div>
 
                           {/* Semester 2 */}
-                          <div className="space-y-4">
-                            <div className="flex items-center justify-between">
-                              <h4 className="text-sm font-bold text-blue-600 flex items-center gap-2">
-                                <div className="w-2 h-2 rounded-full bg-blue-500"></div>
-                                السداسي الثاني (S2)
-                              </h4>
-                              <div className="flex items-center gap-2">
-                                <span className="text-[10px] font-bold text-slate-400 uppercase">{s2Modules.length} مقاييس</span>
+                          <div className="space-y-6">
+                            <div className="flex items-center justify-between bg-blue-50/50 p-4 rounded-2xl border border-blue-100">
+                              <div className="flex items-center gap-3">
+                                <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-sm">
+                                  <BookOpen className="w-4 h-4" />
+                                </div>
+                                <h4 className="text-sm font-black text-blue-900 uppercase tracking-tight">السداسي الثاني (S2)</h4>
+                              </div>
+                              <div className="flex items-center gap-3">
+                                <span className="text-[10px] font-black text-blue-600 uppercase tracking-widest">{s2Modules.length} مقاييس</span>
                                 {(isAdmin || isViceAdmin) && (
                                   <button 
                                     onClick={() => setShowModuleModal({ specialtyId: specialty.id, semester: 'S2' })}
-                                    className="p-1 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-all"
+                                    className="w-8 h-8 bg-white text-blue-600 rounded-xl flex items-center justify-center hover:bg-blue-600 hover:text-white transition-all shadow-sm"
                                     title="إضافة مقياس"
                                   >
-                                    <Plus className="w-3 h-3" />
+                                    <Plus className="w-4 h-4" />
                                   </button>
                                 )}
                               </div>
                             </div>
-                            <div className="space-y-2">
+                            <div className="space-y-3">
                               {s2Modules.length > 0 ? s2Modules.map(module => (
-                                <div key={module.id} className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-100 group/module">
-                                  <div className="flex items-center gap-3">
-                                    <BookOpen className="w-4 h-4 text-slate-400" />
-                                    <span className="text-sm font-medium text-slate-700">{module.name}</span>
-                                  </div>
+                                <div key={module.id} className="flex items-center justify-between p-4 rounded-2xl bg-white border border-slate-100 group/module hover:shadow-md hover:shadow-slate-200/50 transition-all duration-300">
+                                  <span className="text-sm font-extrabold text-slate-700">{module.name}</span>
                                   {(isAdmin || isViceAdmin) && (
-                                    <div className="flex gap-1 opacity-0 group-hover/module:opacity-100 transition-opacity">
-                                      <button onClick={() => setEditingModule(module)} className="p-1 hover:bg-white rounded-lg text-slate-400"><Edit2 className="w-3 h-3" /></button>
-                                      <button onClick={() => handleDeleteModule(module.id)} className="p-1 hover:bg-white rounded-lg text-red-600"><Trash2 className="w-3 h-3" /></button>
+                                    <div className="flex gap-1 opacity-0 group-hover/module:opacity-100 transition-all">
+                                      <button onClick={() => setEditingModule(module)} className="p-2 hover:bg-slate-50 rounded-xl text-slate-400 hover:text-blue-600 transition-colors"><Edit2 className="w-4 h-4" /></button>
+                                      <button onClick={() => handleDeleteModule(module.id)} className="p-2 hover:bg-slate-50 rounded-xl text-red-600 transition-colors"><Trash2 className="w-4 h-4" /></button>
                                     </div>
                                   )}
                                 </div>
                               )) : (
-                                <p className="text-xs text-slate-400 italic py-2">لا توجد مقاييس مسجلة</p>
+                                <div className="py-6 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+                                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">لا توجد مقاييس مسجلة</p>
+                                </div>
                               )}
                             </div>
                           </div>
@@ -481,16 +489,19 @@ export default function SpecialtyManagement() {
             );
           })
         ) : (
-          <div className="h-64 flex flex-col items-center justify-center text-slate-400 bg-white rounded-3xl border border-dashed border-slate-200">
-            <Filter className="w-12 h-12 mb-4 opacity-10" />
-            <p className="text-lg font-medium">لا توجد تخصصات مطابقة للبحث</p>
+          <div className="h-[400px] flex flex-col items-center justify-center text-slate-400 bg-white rounded-4xl border border-dashed border-slate-200 shadow-sm p-12 text-center">
+            <div className="w-20 h-20 rounded-full bg-slate-50 flex items-center justify-center mb-6">
+              <Filter className="w-10 h-10 opacity-10" />
+            </div>
+            <h3 className="text-xl font-black text-slate-900 tracking-tight mb-2">لا توجد نتائج مطابقة</h3>
+            <p className="text-slate-500 font-medium max-w-xs mx-auto mb-8">حاول تغيير معايير البحث أو اختيار طور أكاديمي آخر</p>
             {(isAdmin || isViceAdmin) && cycles.length === 0 && (
               <button 
                 onClick={handleSeed}
                 disabled={seeding}
-                className="mt-4 flex items-center gap-2 px-6 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-all shadow-lg shadow-blue-100 disabled:opacity-50"
+                className="btn-primary flex items-center gap-2"
               >
-                <Database className="w-4 h-4" />
+                <Database className="w-5 h-5" />
                 <span>{seeding ? 'جاري التهيئة...' : 'تهيئة البيانات التجريبية'}</span>
               </button>
             )}

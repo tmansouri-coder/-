@@ -565,7 +565,7 @@ const resources = {
       "wednesday": "الأربعاء",
       "thursday": "الخميس",
       "role_admin": "رئيس القسم",
-      "role_vice_admin": "نائب المدير",
+      "role_vice_admin": "نائب رئيس قسم",
       "role_specialty_manager": "مسؤول تخصص",
       "role_teacher": "أستاذ",
       "external": "خارجي",

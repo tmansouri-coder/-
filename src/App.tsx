@@ -93,32 +93,6 @@ export default function App() {
     return <Login />;
   }
 
-  // Check if account is active (except for the main admin)
-  if (user.role !== 'admin' && user.isActive === false) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4 font-sans" dir={i18n.language === 'ar' ? 'rtl' : 'ltr'}>
-        <div className="max-w-md w-full bg-white rounded-3xl shadow-xl p-8 border border-slate-100 text-center space-y-6">
-          <div className="w-20 h-20 bg-amber-50 rounded-full flex items-center justify-center mx-auto">
-            <Bell className="w-10 h-10 text-amber-600 animate-pulse" />
-          </div>
-          <h2 className="text-2xl font-bold text-slate-900">{t('account_review')}</h2>
-          <p className="text-slate-500 leading-relaxed">
-            {t('account_review_desc')}
-          </p>
-          <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 text-sm text-slate-600">
-            {t('contact_admin')}
-          </div>
-          <button 
-            onClick={() => window.location.reload()}
-            className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-all"
-          >
-            {t('refresh_page')}
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   const renderContent = () => {
     switch (activeTab) {
       case 'dashboard': return <Dashboard />;

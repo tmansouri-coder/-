@@ -13,6 +13,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
 import toast from 'react-hot-toast';
 import { useNotifications } from '../contexts/NotificationContext';
+import { motion, AnimatePresence } from 'motion/react';
 
 export default function ProjectManagement() {
   const { user, isAdmin, isViceAdmin, isSpecialtyManager, isTeacher } = useAuth();
@@ -37,6 +38,7 @@ export default function ProjectManagement() {
   const [showProblemModal, setShowProblemModal] = useState(false);
   const [showAbandonModal, setShowAbandonModal] = useState(false);
   const [showDefenseModal, setShowDefenseModal] = useState(false);
+  const [itemToDelete, setItemToDelete] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -64,7 +66,7 @@ export default function ProjectManagement() {
       }
     };
     fetchData();
-  }, []);
+  }, [selectedYear]);
 
   const handleAddProject = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -259,14 +261,19 @@ export default function ProjectManagement() {
     }
   };
 
-  const handleDeleteProject = async (projectId: string) => {
-    if (!window.confirm('هل أنت متأكد من حذف هذا المشروع؟')) return;
+  const handleDeleteProject = (projectId: string) => {
+    setItemToDelete(projectId);
+  };
+
+  const confirmDelete = async () => {
+    if (!itemToDelete) return;
     try {
-      await deleteDoc(doc(db, 'projects', projectId));
-      setProjects(prev => prev.filter(p => p.id !== projectId));
+      await deleteDoc(doc(db, 'projects', itemToDelete));
+      setProjects(prev => prev.filter(p => p.id !== itemToDelete));
       toast.success('تم حذف المشروع بنجاح');
+      setItemToDelete(null);
     } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, `projects/${projectId}`);
+      handleFirestoreError(err, OperationType.DELETE, `projects/${itemToDelete}`);
     }
   };
 
@@ -453,72 +460,81 @@ export default function ProjectManagement() {
   if (loading) return <div className="p-8 text-center">جاري التحميل...</div>;
 
   return (
-    <div className="space-y-8" dir="rtl">
-      {/* Header & Stats */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900">إدارة مشاريع التخرج (PFE)</h1>
-          <p className="text-slate-500">متابعة مشاريع الليسانس، الماستر، والقرار 1275</p>
+    <div className="space-y-10 pb-12" dir="rtl">
+      {/* Header & Stats Section */}
+      <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
+        <div className="space-y-1">
+          <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">إدارة مشاريع التخرج (PFE)</h1>
+          <p className="text-slate-500 font-medium">متابعة مشاريع الليسانس، الماستر، والقرار 1275</p>
         </div>
-        <div className="flex gap-3">
+        <div className="flex flex-wrap items-center gap-4">
           <button 
             onClick={() => setShowAddModal(true)}
-            className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-all shadow-lg shadow-blue-100 font-bold"
+            className="btn-primary flex items-center gap-2"
           >
             <Plus className="w-5 h-5" />
             <span>اقتراح مشروع</span>
           </button>
-        </div>
-      </div>
-
-      {/* Stats Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
-        <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
-          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">الإجمالي</p>
-          <p className="text-2xl font-black text-slate-900">{stats.total}</p>
-        </div>
-        <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
-          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">مقترح</p>
-          <p className="text-2xl font-black text-blue-600">{stats.proposed}</p>
-        </div>
-        <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
-          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">قيد الإنجاز</p>
-          <p className="text-2xl font-black text-orange-600">{stats.inProgress}</p>
-        </div>
-        <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
-          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">جاهز</p>
-          <p className="text-2xl font-black text-emerald-600">{stats.ready}</p>
-        </div>
-        <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
-          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">القرار 1275</p>
-          <p className="text-2xl font-black text-red-600">{stats.decision1275}</p>
-        </div>
-        <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
-          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">متوسط الإنجاز</p>
-          <div className="flex items-center gap-2">
-            <p className="text-2xl font-black text-slate-900">{stats.avgProgress}%</p>
-            <TrendingUp className="w-4 h-4 text-emerald-500" />
+          <div className="bg-white px-5 py-3 rounded-2xl shadow-sm border border-slate-100 flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600">
+              <ShieldCheck className="w-6 h-6" />
+            </div>
+            <div>
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none mb-1">متوسط الإنجاز</p>
+              <p className="text-lg font-black text-slate-900 leading-none">{stats.avgProgress}%</p>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Search and Filters */}
-      <div className="flex flex-col md:flex-row gap-4 bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
-        <div className="flex-1 relative">
-          <Search className="absolute right-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+      {/* Stats Bento Grid */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+        {[
+          { label: 'الإجمالي', value: stats.total, color: 'slate', icon: Briefcase },
+          { label: 'مقترح', value: stats.proposed, color: 'blue', icon: FileText },
+          { label: 'قيد الإنجاز', value: stats.inProgress, color: 'orange', icon: Clock },
+          { label: 'جاهز', value: stats.ready, color: 'emerald', icon: CheckCircle2 },
+          { label: 'القرار 1275', value: stats.decision1275, color: 'red', icon: ShieldCheck },
+        ].map((stat, i) => (
+          <motion.div 
+            key={stat.label}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: i * 0.1 }}
+            className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all duration-300"
+          >
+            <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center mb-4", 
+              stat.color === 'slate' ? "bg-slate-50 text-slate-600" :
+              stat.color === 'blue' ? "bg-blue-50 text-blue-600" :
+              stat.color === 'orange' ? "bg-orange-50 text-orange-600" :
+              stat.color === 'emerald' ? "bg-emerald-50 text-emerald-600" :
+              "bg-red-50 text-red-600"
+            )}>
+              <stat.icon className="w-5 h-5" />
+            </div>
+            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">{stat.label}</p>
+            <p className="text-3xl font-black text-slate-900 tracking-tight">{stat.value}</p>
+          </motion.div>
+        ))}
+      </div>
+
+      {/* Search & Filters Bento */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <div className="lg:col-span-8 relative group">
+          <Search className="absolute right-5 top-1/2 -translate-y-1/2 w-6 h-6 text-slate-300 transition-colors group-focus-within:text-blue-500" />
           <input 
             type="text" 
             placeholder="البحث عن مشروع، طالب، أو كلمات مفتاحية..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full bg-slate-50 border-none rounded-xl pr-12 pl-4 py-3 focus:ring-2 focus:ring-blue-500"
+            className="w-full bg-white border border-slate-100 rounded-3xl pr-14 pl-6 py-5 focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 outline-none shadow-sm transition-all text-lg font-medium"
           />
         </div>
-        <div className="flex gap-2">
+        <div className="lg:col-span-4">
           <select 
             value={filterStatus}
             onChange={(e) => setFilterStatus(e.target.value as any)}
-            className="bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 text-sm font-bold"
+            className="w-full bg-white border border-slate-100 rounded-3xl px-6 py-5 focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 outline-none shadow-sm transition-all text-lg font-black text-slate-700 appearance-none"
           >
             <option value="All">كل الحالات</option>
             <option value="Proposed">مقترح</option>
@@ -532,23 +548,26 @@ export default function ProjectManagement() {
       </div>
 
       {/* Projects Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {filteredProjects.map(project => (
-          <div 
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        {filteredProjects.map((project, i) => (
+          <motion.div 
             key={project.id} 
-            className="bg-white rounded-3xl border border-slate-100 shadow-sm hover:shadow-md transition-all overflow-hidden group flex flex-col"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: i * 0.05 }}
+            className="group bg-white rounded-4xl border border-slate-100 shadow-sm hover:shadow-2xl hover:shadow-slate-200/50 transition-all duration-500 overflow-hidden flex flex-col"
           >
-            <div className="p-6 space-y-4 flex-1">
+            <div className="p-8 space-y-6 flex-1">
               <div className="flex justify-between items-start">
                 <div className="flex flex-wrap gap-2">
                   <span className={cn(
-                    "px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider",
+                    "px-4 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest shadow-sm",
                     project.status === 'Proposed' ? "bg-slate-100 text-slate-600" :
-                    project.status === 'Validated' ? "bg-emerald-50 text-emerald-600" :
-                    project.status === 'Distributed' ? "bg-blue-100 text-blue-600" :
-                    project.status === 'InProgress' ? "bg-orange-100 text-orange-600" :
-                    project.status === 'Ready' ? "bg-emerald-100 text-emerald-600" :
-                    "bg-purple-100 text-purple-600"
+                    project.status === 'Validated' ? "bg-emerald-100 text-emerald-700" :
+                    project.status === 'Distributed' ? "bg-blue-100 text-blue-700" :
+                    project.status === 'InProgress' ? "bg-orange-100 text-orange-700" :
+                    project.status === 'Ready' ? "bg-emerald-100 text-emerald-700" :
+                    "bg-purple-100 text-purple-700"
                   )}>
                     {project.status === 'Proposed' ? 'مقترح' :
                      project.status === 'Validated' ? 'مؤكد' :
@@ -557,24 +576,24 @@ export default function ProjectManagement() {
                      project.status === 'Ready' ? 'جاهز' : 'تمت المناقشة'}
                   </span>
                   {project.isDecision1275 && (
-                    <span className="px-3 py-1 rounded-full text-[10px] font-bold bg-red-100 text-red-600 uppercase tracking-wider flex items-center gap-1">
-                      <ShieldCheck className="w-3 h-3" />
+                    <span className="px-4 py-1.5 rounded-xl text-[10px] font-black bg-red-50 text-red-600 border border-red-100 uppercase tracking-widest flex items-center gap-1.5 shadow-sm">
+                      <ShieldCheck className="w-3.5 h-3.5" />
                       القرار 1275
                     </span>
                   )}
                 </div>
-                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-all duration-300">
                   {(isAdmin || isViceAdmin || isSpecialtyManager || (isTeacher && project.status === 'Proposed')) && (
                     <>
                       <button 
                         onClick={(e) => { e.stopPropagation(); setEditingProject(project); setShowEditModal(true); }}
-                        className="p-2 text-slate-400 hover:bg-slate-50 rounded-xl"
+                        className="w-10 h-10 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-400 hover:text-blue-600 hover:bg-blue-50 hover:border-blue-100 transition-all"
                       >
                         <Edit2 className="w-4 h-4" />
                       </button>
                       <button 
                         onClick={(e) => { e.stopPropagation(); handleDeleteProject(project.id); }}
-                        className="p-2 text-red-400 hover:bg-red-50 rounded-xl"
+                        className="w-10 h-10 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-400 hover:text-red-600 hover:bg-red-50 hover:border-red-100 transition-all"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -583,68 +602,106 @@ export default function ProjectManagement() {
                 </div>
               </div>
 
-              <h3 className="text-xl font-bold text-slate-900 leading-tight">{project.title}</h3>
+              <h3 className="text-2xl font-black text-slate-900 leading-tight tracking-tight group-hover:text-blue-600 transition-colors">{project.title}</h3>
               
-              <div className="space-y-2">
-                <div className="flex items-center gap-3 text-sm text-slate-600">
-                  <UserIcon className="w-4 h-4 text-slate-400" />
-                  <span className="font-medium">
-                    المؤطر: {teachers.find(t => t.uid === project.supervisorId)?.displayName}
-                    {project.coSupervisorId && ` | مساعد: ${teachers.find(t => t.uid === project.coSupervisorId)?.displayName}`}
-                  </span>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-6 bg-slate-50 rounded-3xl border border-slate-100">
+                <div className="space-y-3">
+                  <div className="space-y-1">
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">المؤطر الرئيسي</p>
+                    <div className="flex items-center gap-2">
+                      <div className="w-6 h-6 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-slate-400">
+                        <UserIcon className="w-3.5 h-3.5" />
+                      </div>
+                      <p className="text-sm font-extrabold text-slate-700">{teachers.find(t => t.uid === project.supervisorId)?.displayName}</p>
+                    </div>
+                  </div>
+                  {project.coSupervisorId && (
+                    <div className="space-y-1">
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">المؤطر المساعد</p>
+                      <div className="flex items-center gap-2">
+                        <div className="w-6 h-6 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-slate-400">
+                          <UserIcon className="w-3.5 h-3.5" />
+                        </div>
+                        <p className="text-sm font-extrabold text-slate-700">{teachers.find(t => t.uid === project.coSupervisorId)?.displayName}</p>
+                      </div>
+                    </div>
+                  )}
                 </div>
-                <div className="flex items-center gap-3 text-sm text-slate-600">
-                  <Users className="w-4 h-4 text-slate-400" />
-                  <span className="font-medium">الطلبة: {project.students?.join('، ') || 'لا يوجد طلبة'}</span>
-                </div>
-                <div className="flex items-center gap-3 text-sm text-slate-600">
-                  <Briefcase className="w-4 h-4 text-slate-400" />
-                  <span className="font-medium">التخصص: {specialties.find(s => s.id === project.specialtyId)?.name}</span>
+                <div className="space-y-3">
+                  <div className="space-y-1">
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">التخصص</p>
+                    <div className="flex items-center gap-2">
+                      <div className="w-6 h-6 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-slate-400">
+                        <Briefcase className="w-3.5 h-3.5" />
+                      </div>
+                      <p className="text-sm font-extrabold text-slate-700">{specialties.find(s => s.id === project.specialtyId)?.name}</p>
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">الطلبة</p>
+                    <div className="flex items-center gap-2">
+                      <div className="w-6 h-6 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-slate-400">
+                        <Users className="w-3.5 h-3.5" />
+                      </div>
+                      <p className="text-sm font-extrabold text-slate-700 truncate">{project.students?.join('، ') || '---'}</p>
+                    </div>
+                  </div>
                 </div>
               </div>
 
-              {/* Progress Bar */}
-              <div className="space-y-2 pt-4">
-                <div className="flex justify-between text-xs font-bold">
-                  <span className="text-slate-400 uppercase tracking-wider">المرحلة: {project.stage}</span>
-                  <span className="text-blue-600">{project.progress}%</span>
+              {/* Progress Bar Section */}
+              <div className="space-y-4">
+                <div className="flex items-end justify-between">
+                  <div className="space-y-1">
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">المرحلة الحالية</p>
+                    <p className="text-sm font-black text-blue-600 uppercase tracking-tight">{project.stage}</p>
+                  </div>
+                  <p className="text-3xl font-black text-slate-900 leading-none">{project.progress}%</p>
                 </div>
-                <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                  <div 
+                <div className="h-4 bg-slate-100 rounded-2xl overflow-hidden p-1">
+                  <motion.div 
+                    initial={{ width: 0 }}
+                    animate={{ width: `${project.progress}%` }}
+                    transition={{ duration: 1, ease: "easeOut" }}
                     className={cn(
-                      "h-full rounded-full transition-all duration-500",
+                      "h-full rounded-xl transition-all duration-500 shadow-sm",
                       project.progress < 30 ? "bg-red-500" :
                       project.progress < 70 ? "bg-orange-500" : "bg-emerald-500"
                     )} 
-                    style={{ width: `${project.progress}%` }} 
                   />
                 </div>
               </div>
 
               {/* Keywords */}
               {project.keywords && project.keywords.length > 0 && (
-                <div className="flex flex-wrap gap-1 pt-2">
+                <div className="flex flex-wrap gap-2 pt-2">
                   {project.keywords.map((k, i) => (
-                    <span key={`${k}-${i}`} className="text-[10px] bg-slate-50 text-slate-500 px-2 py-0.5 rounded border border-slate-100">#{k}</span>
+                    <span key={`${k}-${i}`} className="text-[10px] font-black uppercase tracking-widest bg-white border border-slate-100 text-slate-400 px-3 py-1.5 rounded-xl shadow-sm group-hover:border-blue-100 group-hover:text-blue-500 transition-all">
+                      #{k}
+                    </span>
                   ))}
                 </div>
               )}
             </div>
 
-            <div className="p-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between">
+            <div className="p-6 bg-slate-50/50 border-t border-slate-100 flex items-center justify-between">
               <button 
                 onClick={() => setSelectedProject(project)}
-                className="text-sm font-bold text-blue-600 hover:text-blue-700 flex items-center gap-1"
+                className="px-6 py-3 bg-white border border-slate-200 text-slate-700 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-blue-50 hover:border-blue-100 hover:text-blue-600 transition-all shadow-sm flex items-center gap-2"
               >
-                عرض التفاصيل والمتابعة
+                <span>عرض التفاصيل والمتابعة</span>
                 <ChevronRight className="w-4 h-4 rotate-180" />
               </button>
               <div className="flex gap-2">
-                <button className="p-2 text-slate-400 hover:bg-white rounded-xl transition-all" title="محادثة"><MessageSquare className="w-4 h-4" /></button>
-                <button className="p-2 text-slate-400 hover:bg-white rounded-xl transition-all" title="المذكرة"><FileText className="w-4 h-4" /></button>
+                <button className="w-12 h-12 rounded-2xl bg-white border border-slate-200 flex items-center justify-center text-slate-400 hover:text-blue-600 hover:border-blue-100 transition-all shadow-sm" title="محادثة">
+                  <MessageSquare className="w-5 h-5" />
+                </button>
+                <button className="w-12 h-12 rounded-2xl bg-white border border-slate-200 flex items-center justify-center text-slate-400 hover:text-emerald-600 hover:border-emerald-100 transition-all shadow-sm" title="المذكرة">
+                  <FileText className="w-5 h-5" />
+                </button>
               </div>
             </div>
-          </div>
+          </motion.div>
         ))}
       </div>
 
@@ -1251,6 +1308,35 @@ export default function ProjectManagement() {
                 <button type="button" onClick={() => setShowDefenseModal(false)} className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl font-bold hover:bg-slate-200 transition-all">إلغاء</button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {itemToDelete && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl p-8 text-center space-y-6">
+            <div className="w-20 h-20 bg-red-50 rounded-full flex items-center justify-center mx-auto">
+              <Trash2 className="w-10 h-10 text-red-600" />
+            </div>
+            <div className="space-y-2">
+              <h3 className="text-2xl font-black text-slate-900">تأكيد الحذف</h3>
+              <p className="text-slate-500 font-medium">هل أنت متأكد من حذف هذا المشروع؟ لا يمكن التراجع عن هذا الإجراء.</p>
+            </div>
+            <div className="flex gap-3 pt-2">
+              <button 
+                onClick={confirmDelete}
+                className="flex-1 bg-red-600 text-white py-4 rounded-2xl font-black hover:bg-red-700 transition-all shadow-lg shadow-red-100"
+              >
+                تأكيد الحذف
+              </button>
+              <button 
+                onClick={() => setItemToDelete(null)}
+                className="flex-1 bg-slate-100 text-slate-600 py-4 rounded-2xl font-black hover:bg-slate-200 transition-all"
+              >
+                إلغاء
+              </button>
+            </div>
           </div>
         </div>
       )}
