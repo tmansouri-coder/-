@@ -1,13 +1,11 @@
 import React, { useState } from 'react';
 import { signInWithPopup, GoogleAuthProvider, signInWithEmailAndPassword } from 'firebase/auth';
-import { collection, query, where, getDocs, doc, getDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, doc, getDoc, updateDoc, setDoc } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
 import { LogIn, Settings, ShieldCheck, Mail, Lock, User } from 'lucide-react';
 import { motion } from 'motion/react';
 
 export default function Login() {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -18,40 +16,6 @@ export default function Login() {
       await signInWithPopup(auth, provider);
     } catch (err) {
       setError('فشل تسجيل الدخول عبر جوجل');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleEmailLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      setLoading(true);
-      setError('');
-      
-      let loginEmail = email;
-      
-      // If the input doesn't look like an email, try to find it as a username
-      if (!email.includes('@')) {
-        const usernameDoc = await getDoc(doc(db, 'usernames', email.toLowerCase()));
-        
-        if (usernameDoc.exists()) {
-          loginEmail = usernameDoc.data().email;
-        } else {
-          throw new Error('اسم المستخدم غير موجود');
-        }
-      }
-      
-      await signInWithEmailAndPassword(auth, loginEmail, password);
-    } catch (err: any) {
-      console.error('Login error:', err);
-      if (err.code === 'auth/invalid-credential') {
-        setError('خطأ في بيانات الدخول. تأكد من صحة كلمة المرور، أو تأكد من تفعيل حسابك في نظام Authentication.');
-      } else if (err.message === 'اسم المستخدم غير موجود') {
-        setError('اسم المستخدم هذا غير مسجل في النظام.');
-      } else {
-        setError('حدث خطأ أثناء تسجيل الدخول. يرجى المحاولة مرة أخرى.');
-      }
     } finally {
       setLoading(false);
     }
@@ -100,43 +64,17 @@ export default function Login() {
             className="bg-red-50 text-red-600 p-4 rounded-2xl text-sm mb-6 border border-red-100 flex items-center gap-3"
           >
             <ShieldCheck className="w-5 h-5 shrink-0" />
-            {error}
+            <span className="flex-1">{error}</span>
           </motion.div>
         )}
 
-        <form onSubmit={handleEmailLogin} className="space-y-5">
-          <div className="space-y-2">
-            <label className="block text-sm font-bold text-slate-700 mr-1">اسم المستخدم أو البريد الإلكتروني</label>
-            <div className="relative">
-              <User className="absolute right-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-              <input
-                type="text"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full pr-12 pl-4 py-3.5 rounded-2xl bg-slate-50 border border-slate-200 focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none transition-all font-medium"
-                placeholder="أدخل اسم المستخدم"
-                required
-              />
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <label className="block text-sm font-bold text-slate-700 mr-1">كلمة المرور</label>
-            <div className="relative">
-              <Lock className="absolute right-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full pr-12 pl-4 py-3.5 rounded-2xl bg-slate-50 border border-slate-200 focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none transition-all font-medium"
-                placeholder="••••••••"
-                required
-              />
-            </div>
-          </div>
+        <div className="space-y-6">
+          <p className="text-center text-slate-600 font-medium px-4">
+            يرجى تسجيل الدخول باستخدام بريدك الإلكتروني الجامعي للوصول إلى النظام.
+          </p>
 
           <button
-            type="submit"
+            onClick={handleGoogleLogin}
             disabled={loading}
             className="w-full bg-blue-600 text-white py-4 rounded-2xl font-bold hover:bg-blue-700 active:scale-[0.98] transition-all flex items-center justify-center gap-3 shadow-lg shadow-blue-500/30 disabled:opacity-50 disabled:pointer-events-none"
           >
@@ -144,32 +82,23 @@ export default function Login() {
               <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
             ) : (
               <>
-                <LogIn className="w-5 h-5" />
-                <span>تسجيل الدخول</span>
+                <img src="https://www.google.com/favicon.ico" alt="Google" className="w-5 h-5 brightness-0 invert" />
+                <span>الدخول عبر البريد الجامعي (Google)</span>
               </>
             )}
           </button>
-        </form>
 
-        <div className="relative my-10">
-          <div className="absolute inset-0 flex items-center">
-            <div className="w-full border-t border-slate-200"></div>
-          </div>
-          <div className="relative flex justify-center text-sm">
-            <span className="px-4 bg-white text-slate-400 font-medium">أو الدخول السريع عبر</span>
+          <div className="p-4 bg-amber-50 rounded-2xl border border-amber-100">
+            <div className="flex gap-3">
+              <ShieldCheck className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+              <div className="text-xs text-amber-800 leading-relaxed">
+                <strong>ملاحظة هامة:</strong> يجب أن يكون بريدك الإلكتروني مسجلاً مسبقاً في قاعدة بيانات القسم لتتمكن من الدخول. إذا واجهت مشكلة، يرجى الاتصال برئيس القسم.
+              </div>
+            </div>
           </div>
         </div>
 
-        <button
-          onClick={handleGoogleLogin}
-          disabled={loading}
-          className="w-full bg-white border-2 border-slate-100 text-slate-700 py-4 rounded-2xl font-bold hover:bg-slate-50 active:scale-[0.98] transition-all flex items-center justify-center gap-3 disabled:opacity-50"
-        >
-          <img src="https://www.google.com/favicon.ico" alt="Google" className="w-5 h-5" />
-          <span>البريد الإلكتروني الجامعي</span>
-        </button>
-
-        <p className="text-center text-slate-400 text-xs mt-8 font-medium">
+        <p className="text-center text-slate-400 text-xs mt-10 font-medium">
           جميع الحقوق محفوظة &copy; {new Date().getFullYear()} قسم الهندسة الميكانيكية
         </p>
       </motion.div>

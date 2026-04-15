@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { collection, getDocs, query, where, addDoc, updateDoc, deleteDoc, doc, serverTimestamp } from 'firebase/firestore';
+import { collection, getDocs, query, where, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, limit } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { User, ScheduleSession, SessionLog, Module, OvertimeRequest } from '../types';
+import { User, ScheduleSession, SessionLog, Module, OvertimeRequest, PedagogicalCalendar } from '../types';
 import { 
   Clock, Calculator, Download, User as UserIcon, BookOpen, 
   AlertCircle, CheckCircle2, Plus, Trash2, Edit2, X, Send, Check, AlertTriangle
@@ -19,21 +19,24 @@ export default function OvertimeCalc() {
   const [logs, setLogs] = useState<SessionLog[]>([]);
   const [modules, setModules] = useState<Module[]>([]);
   const [overtimeRequests, setOvertimeRequests] = useState<OvertimeRequest[]>([]);
+  const [calendar, setCalendar] = useState<PedagogicalCalendar | null>(null);
   const [loading, setLoading] = useState(true);
   const [showRequestModal, setShowRequestModal] = useState(false);
   const [editingRequest, setEditingRequest] = useState<OvertimeRequest | null>(null);
   const [filterSemester, setFilterSemester] = useState<'All' | 'S1' | 'S2'>('All');
+  const [monthlyInputs, setMonthlyInputs] = useState<{ month: string, hours: number }[]>([]);
 
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
       try {
-        const [usersSnap, sessionsSnap, logsSnap, modulesSnap, requestsSnap] = await Promise.all([
+        const [usersSnap, sessionsSnap, logsSnap, modulesSnap, requestsSnap, calendarSnap] = await Promise.all([
           getDocs(query(collection(db, 'users'), where('role', 'in', ['teacher', 'specialty_manager']))),
           getDocs(query(collection(db, 'scheduleSessions'), where('academicYear', '==', selectedYear))),
           getDocs(query(collection(db, 'sessionLogs'), where('academicYear', '==', selectedYear))),
           getDocs(query(collection(db, 'modules'), where('academicYear', '==', selectedYear))),
-          getDocs(query(collection(db, 'overtimeRequests'), where('academicYear', '==', selectedYear)))
+          getDocs(query(collection(db, 'overtimeRequests'), where('academicYear', '==', selectedYear))),
+          getDocs(query(collection(db, 'pedagogicalCalendars'), where('academicYear', '==', selectedYear), limit(1)))
         ]);
 
         setTeachers(usersSnap.docs.map(d => ({ uid: d.id, ...d.data() } as User)));
@@ -41,6 +44,9 @@ export default function OvertimeCalc() {
         setLogs(logsSnap.docs.map(d => ({ id: d.id, ...d.data() } as SessionLog)));
         setModules(modulesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Module)));
         setOvertimeRequests(requestsSnap.docs.map(d => ({ id: d.id, ...d.data() } as OvertimeRequest)));
+        if (!calendarSnap.empty) {
+          setCalendar({ id: calendarSnap.docs[0].id, ...calendarSnap.docs[0].data() } as PedagogicalCalendar);
+        }
       } catch (err) {
         handleFirestoreError(err, OperationType.GET, 'overtime_data');
       } finally {
@@ -49,6 +55,22 @@ export default function OvertimeCalc() {
     };
     fetchData();
   }, []);
+
+  const getMonthsInSemester = (semester: 'S1' | 'S2') => {
+    if (!calendar) return [];
+    const start = new Date(semester === 'S1' ? calendar.s1Start : calendar.s2Start);
+    const end = new Date(semester === 'S1' ? calendar.s1End : calendar.s2End);
+    
+    const months = [];
+    let current = new Date(start.getFullYear(), start.getMonth(), 1);
+    const last = new Date(end.getFullYear(), end.getMonth(), 1);
+    
+    while (current <= last) {
+      months.push(current.toLocaleString('default', { month: 'long', year: 'numeric' }));
+      current.setMonth(current.getMonth() + 1);
+    }
+    return months;
+  };
 
   const calculateHours = (teacherId: string, semester: 'S1' | 'S2') => {
     const teacherSessions = sessions.filter(s => s.teacherId === teacherId && s.semester === semester);
@@ -72,9 +94,25 @@ export default function OvertimeCalc() {
     
     const baseWeeklyQuota = 9;
     const overtimeWeekly = Math.max(0, weeklyHours - baseWeeklyQuota);
+    const semesterMonths = getMonthsInSemester(semester);
+    const monthsInSemester = semesterMonths.length || 4;
     
-    return { weeklyHours, totalTaughtHours, overtimeWeekly, baseWeeklyQuota };
+    return { weeklyHours, totalTaughtHours, overtimeWeekly, baseWeeklyQuota, monthsInSemester, semesterMonths };
   };
+
+  useEffect(() => {
+    if (showRequestModal || editingRequest) {
+      const sem = editingRequest?.semester || (filterSemester === 'All' ? 'S1' : filterSemester);
+      const months = getMonthsInSemester(sem);
+      
+      if (editingRequest) {
+        setMonthlyInputs(editingRequest.monthlyBreakdown);
+      } else {
+        const { overtimeWeekly } = calculateHours(currentUser?.uid || '', sem);
+        setMonthlyInputs(months.map(m => ({ month: m, hours: overtimeWeekly * 4 })));
+      }
+    }
+  }, [showRequestModal, editingRequest, filterSemester, calendar]);
 
   const handleAddRequest = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -82,24 +120,26 @@ export default function OvertimeCalc() {
     const formData = new FormData(e.currentTarget);
     const semester = formData.get('semester') as 'S1' | 'S2';
     
-    const { weeklyHours, overtimeWeekly, baseWeeklyQuota } = calculateHours(currentUser.uid, semester);
+    const { weeklyHours, baseWeeklyQuota } = calculateHours(currentUser.uid, semester);
     
+    const totalHours = monthlyInputs.reduce((acc, m) => acc + m.hours, 0);
+
     const requestData = {
-      teacherId: currentUser.uid,
-      month: formData.get('month') as string,
-      semester: formData.get('semester') as 'S1' | 'S2',
+      teacherId: editingRequest?.teacherId || currentUser.uid,
+      semester: semester,
       weeklyQuota: baseWeeklyQuota,
       actualWeeklyHours: weeklyHours,
-      overtimeHours: overtimeWeekly * 4, // Assuming 4 weeks in a month for simplicity or user input
-      status: 'Pending' as const,
+      monthlyBreakdown: monthlyInputs,
+      totalOvertimeHours: totalHours,
+      status: editingRequest?.status || 'Pending',
       academicYear: selectedYear,
-      createdAt: new Date().toISOString()
+      createdAt: editingRequest?.createdAt || new Date().toISOString()
     };
 
     try {
       if (editingRequest) {
         await updateDoc(doc(db, 'overtimeRequests', editingRequest.id), requestData);
-        setOvertimeRequests(prev => prev.map(r => r.id === editingRequest.id ? { ...r, ...requestData } : r));
+        setOvertimeRequests(prev => prev.map(r => r.id === editingRequest.id ? { ...r, ...requestData } as OvertimeRequest : r));
         toast.success('تم تحديث الطلب بنجاح');
       } else {
         const docRef = await addDoc(collection(db, 'overtimeRequests'), requestData);
@@ -180,7 +220,7 @@ export default function OvertimeCalc() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             {(() => {
               const sem = filterSemester === 'All' ? 'S1' : filterSemester;
-              const { weeklyHours, overtimeWeekly, baseWeeklyQuota } = calculateHours(currentUser.uid, sem);
+              const { weeklyHours, overtimeWeekly, baseWeeklyQuota, monthsInSemester } = calculateHours(currentUser.uid, sem);
               const hasMetQuota = weeklyHours >= baseWeeklyQuota;
               
               return (
@@ -199,28 +239,33 @@ export default function OvertimeCalc() {
                     </div>
                   </div>
 
-                  <div className={cn(
-                    "p-6 rounded-3xl border shadow-sm flex flex-col justify-center",
-                    hasMetQuota ? "bg-emerald-50 border-emerald-100" : "bg-orange-50 border-orange-100"
-                  )}>
-                    <div className="flex items-center gap-3">
-                      {hasMetQuota ? <CheckCircle2 className="w-8 h-8 text-emerald-600" /> : <AlertTriangle className="w-8 h-8 text-orange-600" />}
-                      <div>
-                        <h4 className={cn("font-bold", hasMetQuota ? "text-emerald-900" : "text-orange-900")}>
-                          {hasMetQuota ? "مستوفي النصاب" : "لم يستوفِ النصاب"}
-                        </h4>
-                        <p className={cn("text-xs font-medium", hasMetQuota ? "text-emerald-700" : "text-orange-700")}>
-                          {hasMetQuota ? `لديك ${overtimeWeekly} ساعة إضافية أسبوعياً` : `ينقصك ${baseWeeklyQuota - weeklyHours} ساعة للوصول للنصاب`}
-                        </p>
+                  {/* Admin-only cards hidden for teachers */}
+                  {(isAdmin || isViceAdmin) && (
+                    <>
+                      <div className={cn(
+                        "p-6 rounded-3xl border shadow-sm flex flex-col justify-center",
+                        hasMetQuota ? "bg-emerald-50 border-emerald-100" : "bg-orange-50 border-orange-100"
+                      )}>
+                        <div className="flex items-center gap-3">
+                          {hasMetQuota ? <CheckCircle2 className="w-8 h-8 text-emerald-600" /> : <AlertTriangle className="w-8 h-8 text-orange-600" />}
+                          <div>
+                            <h4 className={cn("font-bold", hasMetQuota ? "text-emerald-900" : "text-orange-900")}>
+                              {hasMetQuota ? "مستوفي النصاب" : "لم يستوفِ النصاب"}
+                            </h4>
+                            <p className={cn("text-xs font-medium", hasMetQuota ? "text-emerald-700" : "text-orange-700")}>
+                              {hasMetQuota ? `لديك ${overtimeWeekly} ساعة إضافية أسبوعياً` : `ينقصك ${baseWeeklyQuota - weeklyHours} ساعة للوصول للنصاب`}
+                            </p>
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  </div>
 
-                  <div className="bg-blue-600 p-6 rounded-3xl shadow-lg shadow-blue-100 text-white flex flex-col justify-center">
-                    <p className="text-xs font-bold text-blue-100 uppercase mb-1">إجمالي الساعات الإضافية (شهرياً)</p>
-                    <h3 className="text-3xl font-black">{overtimeWeekly * 4} <span className="text-sm font-bold opacity-60">سا</span></h3>
-                    <p className="text-[10px] opacity-80 mt-1">* تقدير مبني على 4 أسابيع عمل</p>
-                  </div>
+                      <div className="bg-blue-600 p-6 rounded-3xl shadow-lg shadow-blue-100 text-white flex flex-col justify-center">
+                        <p className="text-xs font-bold text-blue-100 uppercase mb-1">إجمالي الساعات الإضافية (للسداسي)</p>
+                        <h3 className="text-3xl font-black">{overtimeWeekly * 4 * monthsInSemester} <span className="text-sm font-bold opacity-60">سا</span></h3>
+                        <p className="text-[10px] opacity-80 mt-1">* محسوبة لـ {monthsInSemester} أشهر (4 أسابيع/شهر)</p>
+                      </div>
+                    </>
+                  )}
                 </>
               );
             })()}
@@ -241,9 +286,9 @@ export default function OvertimeCalc() {
               <thead className="bg-slate-50 border-b border-slate-100">
                 <tr>
                   {(isAdmin || isViceAdmin) && <th className="p-4 text-sm font-bold text-slate-500">الأستاذ</th>}
-                  <th className="p-4 text-sm font-bold text-slate-500">الشهر</th>
+                  <th className="p-4 text-sm font-bold text-slate-500">الفترة</th>
                   <th className="p-4 text-sm font-bold text-slate-500 text-center">السداسي</th>
-                  <th className="p-4 text-sm font-bold text-slate-500 text-center">الساعات الإضافية</th>
+                  <th className="p-4 text-sm font-bold text-slate-500 text-center">إجمالي الساعات</th>
                   <th className="p-4 text-sm font-bold text-slate-500">الحالة</th>
                   <th className="p-4 text-sm font-bold text-slate-500">الإجراءات</th>
                 </tr>
@@ -263,11 +308,15 @@ export default function OvertimeCalc() {
                             </div>
                           </td>
                         )}
-                        <td className="p-4 text-sm font-bold text-slate-600">{request.month}</td>
+                        <td className="p-4 text-sm font-bold text-slate-600">
+                          {request.monthlyBreakdown?.length > 0 
+                            ? `${request.monthlyBreakdown[0].month} - ${request.monthlyBreakdown[request.monthlyBreakdown.length-1].month}`
+                            : request.semester}
+                        </td>
                         <td className="p-4 text-center text-sm font-medium">{request.semester}</td>
                         <td className="p-4 text-center">
                           <span className="px-3 py-1 bg-blue-50 text-blue-600 rounded-lg text-xs font-black">
-                            {request.overtimeHours} سا
+                            {request.totalOvertimeHours} سا
                           </span>
                         </td>
                         <td className="p-4">
@@ -415,21 +464,65 @@ export default function OvertimeCalc() {
             </div>
             <form onSubmit={handleAddRequest} className="p-6 space-y-4">
               <div className="space-y-2">
-                <label className="text-sm font-bold text-slate-700">الشهر</label>
-                <input type="month" name="month" required defaultValue={editingRequest?.month || new Date().toISOString().slice(0, 7)} className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500" />
-              </div>
-              <div className="space-y-2">
                 <label className="text-sm font-bold text-slate-700">السداسي</label>
-                <select name="semester" required defaultValue={editingRequest?.semester || 'S1'} className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500">
+                <select 
+                  name="semester" 
+                  required 
+                  defaultValue={editingRequest?.semester || 'S1'} 
+                  className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500"
+                  onChange={(e) => setFilterSemester(e.target.value as any)}
+                >
                   <option value="S1">السداسي الأول (S1)</option>
                   <option value="S2">السداسي الثاني (S2)</option>
                 </select>
               </div>
-              <div className="p-4 bg-blue-50 rounded-2xl border border-blue-100">
-                <p className="text-xs text-blue-700 leading-relaxed">
-                  * سيتم حساب الساعات الإضافية تلقائياً بناءً على جدول حصصك الحالي (النصاب: 9 ساعات).
-                </p>
-              </div>
+
+              {(() => {
+                const sem = editingRequest?.semester || (filterSemester === 'All' ? 'S1' : filterSemester);
+                const { overtimeWeekly } = calculateHours(currentUser.uid, sem);
+                
+                return (
+                  <div className="space-y-4">
+                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                      <p className="text-xs font-bold text-slate-500 mb-4 uppercase">تفاصيل الساعات الشهرية:</p>
+                      <div className="space-y-3">
+                        {monthlyInputs.map((m, idx) => (
+                          <div key={m.month} className="flex items-center justify-between gap-4">
+                            <span className="text-xs text-slate-600 flex-1">{m.month}</span>
+                            <div className="flex items-center gap-2">
+                              <input 
+                                type="number" 
+                                step="0.25"
+                                value={m.hours}
+                                onChange={(e) => {
+                                  const newInputs = [...monthlyInputs];
+                                  newInputs[idx].hours = parseFloat(e.target.value) || 0;
+                                  setMonthlyInputs(newInputs);
+                                }}
+                                className="w-20 bg-white border border-slate-200 rounded-lg px-2 py-1 text-sm font-bold text-center focus:ring-2 focus:ring-blue-500 outline-none"
+                              />
+                              <span className="text-[10px] font-bold text-slate-400">سا</span>
+                            </div>
+                          </div>
+                        ))}
+                        <div className="pt-3 mt-3 border-t border-slate-200 flex justify-between text-sm font-black">
+                          <span className="text-blue-600">الإجمالي</span>
+                          <span className="text-blue-600">{monthlyInputs.reduce((acc, m) => acc + m.hours, 0)} سا</span>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <div className="p-4 bg-blue-50 rounded-2xl border border-blue-100">
+                      <p className="text-xs text-blue-700 leading-relaxed">
+                        {isAdmin || isViceAdmin 
+                          ? "بصفتك مسؤولاً، يمكنك تعديل الساعات المقترحة قبل التأكيد."
+                          : "تم حساب الساعات تلقائياً بناءً على جدولك، يمكنك تعديلها إذا لزم الأمر."}
+                      </p>
+                    </div>
+                  </div>
+                );
+              })()}
+
               <div className="pt-4 flex gap-3">
                 <button type="submit" className="flex-1 bg-blue-600 text-white py-3 rounded-xl font-bold hover:bg-blue-700 transition-all flex items-center justify-center gap-2">
                   <Send className="w-4 h-4" />

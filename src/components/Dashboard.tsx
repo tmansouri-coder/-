@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { seedInitialData } from '../lib/seed';
-import { PedagogicalCalendar, CalendarEvent, CalendarEventType } from '../types';
+import { PedagogicalCalendar, CalendarEvent, CalendarEventType, Module, Project, User, Cycle, Level, Specialty } from '../types';
 import { useTranslation } from 'react-i18next';
 
 const EVENT_TYPE_COLORS: Record<CalendarEventType, string> = {
@@ -61,30 +61,78 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState({
     teachers: 0,
+    students: 0,
     sessions: 0,
     projects: 0,
-    modules: 0
+    modules: 0,
+    avgProgress: 0,
+    projectCompletion: 0
   });
   const [recentSessions, setRecentSessions] = useState<any[]>([]);
   const [calendar, setCalendar] = useState<PedagogicalCalendar | null>(null);
+  const [breakdown, setBreakdown] = useState<any[]>([]);
 
   useEffect(() => {
     const fetchStats = async () => {
       try {
-        const [teachersSnap, sessionsSnap, projectsSnap, modulesSnap, calendarSnap] = await Promise.all([
+        const [teachersSnap, studentsSnap, sessionsSnap, projectsSnap, modulesSnap, calendarSnap, cyclesSnap, levelsSnap, specialtiesSnap] = await Promise.all([
           getDocs(collection(db, 'users')),
+          getDocs(collection(db, 'students')),
           getDocs(collection(db, 'sessionLogs')),
           getDocs(collection(db, 'projects')),
           getDocs(collection(db, 'modules')),
-          getDocs(query(collection(db, 'pedagogicalCalendars'), orderBy('academicYear', 'desc'), limit(1)))
+          getDocs(query(collection(db, 'pedagogicalCalendars'), orderBy('academicYear', 'desc'), limit(1))),
+          getDocs(collection(db, 'cycles')),
+          getDocs(collection(db, 'levels')),
+          getDocs(collection(db, 'specialties'))
         ]);
+
+        const teachers = teachersSnap.docs.map(d => d.data() as User);
+        const modules = modulesSnap.docs.map(d => d.data() as Module);
+        const projects = projectsSnap.docs.map(d => d.data() as Project);
+        const cycles = cyclesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Cycle));
+        const levels = levelsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Level));
+        const specialties = specialtiesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Specialty));
+
+        const avgProgress = modules.length > 0 
+          ? Math.round(modules.reduce((acc, m) => acc + (m.progress || 0), 0) / modules.length)
+          : 0;
+        
+        const projectCompletion = projects.length > 0
+          ? Math.round(projects.reduce((acc, p) => acc + (p.progress || 0), 0) / projects.length)
+          : 0;
 
         setStats({
           teachers: teachersSnap.size,
+          students: studentsSnap.size,
           sessions: sessionsSnap.size,
           projects: projectsSnap.size,
-          modules: modulesSnap.size
+          modules: modulesSnap.size,
+          avgProgress,
+          projectCompletion
         });
+
+        // Calculate breakdown
+        const breakdownData: any[] = [];
+        cycles.forEach(cycle => {
+          const cycleLevels = levels.filter(l => l.cycleId === cycle.id);
+          cycleLevels.forEach(level => {
+            const levelSpecs = specialties.filter(s => s.levelId === level.id);
+            levelSpecs.forEach(spec => {
+              const specModules = modules.filter(m => m.specialtyId === spec.id);
+              if (specModules.length > 0) {
+                const progress = Math.round(specModules.reduce((acc, m) => acc + (m.progress || 0), 0) / specModules.length);
+                breakdownData.push({
+                  cycle: cycle.name,
+                  level: level.name,
+                  specialty: spec.name,
+                  progress
+                });
+              }
+            });
+          });
+        });
+        setBreakdown(breakdownData);
 
         if (!calendarSnap.empty) {
           setCalendar({ id: calendarSnap.docs[0].id, ...calendarSnap.docs[0].data() } as PedagogicalCalendar);
@@ -143,9 +191,9 @@ export default function Dashboard() {
 
   const statCards = [
     { label: t('teachers'), value: stats.teachers, icon: Users, color: 'bg-blue-500' },
-    { label: t('recorded_sessions'), value: stats.sessions, icon: Calendar, color: 'bg-emerald-500' },
-    { label: t('projects'), value: stats.projects, icon: ClipboardList, color: 'bg-amber-500' },
-    { label: t('modules'), value: stats.modules, icon: BookOpen, color: 'bg-indigo-500' },
+    { label: t('total_students'), value: stats.students, icon: Users, color: 'bg-emerald-500' },
+    { label: t('recorded_sessions'), value: stats.sessions, icon: Calendar, color: 'bg-amber-500' },
+    { label: t('projects'), value: stats.projects, icon: ClipboardList, color: 'bg-indigo-500' },
   ];
 
   return (
@@ -271,6 +319,22 @@ export default function Dashboard() {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {calendar && (
+                <>
+                  <div className="p-4 rounded-xl border bg-blue-50 text-blue-700 border-blue-100 flex flex-col justify-between">
+                    <p className="text-[10px] font-bold uppercase mb-1 opacity-70">{t('semester')} 1</p>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-bold">{calendar.s1Start} إلى {calendar.s1End}</span>
+                    </div>
+                  </div>
+                  <div className="p-4 rounded-xl border bg-blue-50 text-blue-700 border-blue-100 flex flex-col justify-between">
+                    <p className="text-[10px] font-bold uppercase mb-1 opacity-70">{t('semester')} 2</p>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-bold">{calendar.s2Start} إلى {calendar.s2End}</span>
+                    </div>
+                  </div>
+                </>
+              )}
               {calendar?.events && calendar.events.length > 0 ? (
                 calendar.events.map((event) => (
                   <div key={event.id} className={cn("p-4 rounded-xl border flex flex-col justify-between", EVENT_TYPE_COLORS[event.type])}>
@@ -323,34 +387,33 @@ export default function Dashboard() {
         </div>
 
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
-          <h2 className="text-lg font-bold text-slate-900 mb-6">{t('progress_stats')}</h2>
-          <div className="space-y-6">
-            <div>
-              <div className="flex justify-between mb-2">
-                <span className="text-sm font-medium text-slate-600">{t('graduation_projects')}</span>
-                <span className="text-sm font-bold text-blue-600">65%</span>
+          <h2 className="text-lg font-bold text-slate-900 mb-6">تفاصيل تقدم المقاييس حسب التخصص</h2>
+          <div className="space-y-4">
+            {breakdown.length > 0 ? breakdown.map((item, idx) => (
+              <div key={idx} className="p-4 bg-slate-50 rounded-xl border border-slate-100">
+                <div className="flex justify-between items-start mb-3">
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded text-[10px] font-bold">{item.cycle}</span>
+                      <span className="px-2 py-0.5 bg-slate-200 text-slate-700 rounded text-[10px] font-bold">{item.level}</span>
+                    </div>
+                    <h4 className="text-sm font-bold text-slate-900">{item.specialty}</h4>
+                  </div>
+                  <span className="text-sm font-black text-blue-600">{item.progress}%</span>
+                </div>
+                <div className="w-full bg-slate-200 rounded-full h-1.5">
+                  <div 
+                    className={cn(
+                      "h-1.5 rounded-full transition-all",
+                      item.progress > 70 ? "bg-emerald-500" : item.progress > 30 ? "bg-blue-500" : "bg-orange-500"
+                    )} 
+                    style={{ width: `${item.progress}%` }}
+                  />
+                </div>
               </div>
-              <div className="w-full bg-slate-100 rounded-full h-2">
-                <div className="bg-blue-600 h-2 rounded-full" style={{ width: '65%' }}></div>
-              </div>
-            </div>
-            <div>
-              <div className="flex justify-between mb-2">
-                <span className="text-sm font-medium text-slate-600">{t('module_coverage')}</span>
-                <span className="text-sm font-bold text-emerald-600">82%</span>
-              </div>
-              <div className="w-full bg-slate-100 rounded-full h-2">
-                <div className="bg-emerald-600 h-2 rounded-full" style={{ width: '82%' }}></div>
-              </div>
-            </div>
-            <div className="pt-4 border-t border-slate-50">
-              <div className="flex items-center gap-3 text-amber-600 bg-amber-50 p-4 rounded-xl border border-amber-100">
-                <AlertCircle className="w-5 h-5 shrink-0" />
-                <p className="text-xs font-medium leading-relaxed">
-                  {t('teachers_not_logged', { count: 3 })}
-                </p>
-              </div>
-            </div>
+            )) : (
+              <p className="text-center text-slate-400 py-4">لا توجد بيانات متاحة</p>
+            )}
           </div>
         </div>
       </div>

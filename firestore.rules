@@ -31,10 +31,11 @@ service cloud.firestore {
 
     // Users collection
     match /users/{uid} {
-      allow read: if isAuthenticated();
+      allow get: if true;
+      allow list: if true; // Needed for login checks and dashboard stats
       allow create: if isAuthenticated() && (request.auth.uid == uid || isAdmin() || isViceAdmin());
       allow update: if isAuthenticated() && (request.auth.uid == uid || isAdmin() || isViceAdmin());
-      allow delete: if isAdmin();
+      allow delete: if isAdmin() || (isAuthenticated() && resource.data.email == request.auth.token.email);
     }
 
     // Cycles
@@ -129,7 +130,7 @@ service cloud.firestore {
 
     // Settings
     match /settings/{id} {
-      allow read: if true;
+      allow read: if id == 'general' || isAuthenticated();
       allow write: if isAdmin();
     }
 
@@ -155,17 +156,24 @@ service cloud.firestore {
 
     // Usernames mapping (for login by username)
     match /usernames/{username} {
+      allow get: if true;
+      allow list: if true;
+      allow create: if true;
+      allow update: if isAuthenticated() && (isAdmin() || isViceAdmin() || (resource != null && resource.data.email == request.auth.token.email));
+      allow delete: if isAdmin() || isViceAdmin();
+    }
+
+    // Test connection
+    match /test/connection {
       allow read: if true;
-      allow write: if isAdmin() || isViceAdmin();
     }
 
     // Teacher Reports
     match /teacherReports/{id} {
       allow read: if isAuthenticated() && (
-        request.auth.token.email == 't.mansouri@lagh-univ.dz' ||
-        (resource != null && resource.data.teacherId == request.auth.uid) ||
         isAdmin() || 
-        isViceAdmin()
+        isViceAdmin() || 
+        (resource != null && resource.data.teacherId == request.auth.uid)
       );
       allow create: if isAuthenticated() && request.resource.data.teacherId == request.auth.uid;
       allow update: if isAdmin() || isViceAdmin();

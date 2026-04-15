@@ -50,6 +50,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               uid: fUser.uid,
               displayName: fUser.displayName || seededData.displayName,
               username,
+              isActive: true, // Automatically activate when linking
             } as User;
             
             await setDoc(userDocRef, userData);

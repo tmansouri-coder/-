@@ -1,13 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { collection, getDocs, updateDoc, doc, query, where, deleteDoc, writeBatch } from 'firebase/firestore';
 import { initializeApp, deleteApp } from 'firebase/app';
-import { getAuth, createUserWithEmailAndPassword } from 'firebase/auth';
-import { db, handleFirestoreError, OperationType, firebaseConfig } from '../lib/firebase';
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, deleteUser, updatePassword } from 'firebase/auth';
+import { auth, db, handleFirestoreError, OperationType, firebaseConfig } from '../lib/firebase';
 import { User, Rank, EmploymentType, UserRole, Specialty, Level, Cycle } from '../types';
 import { 
   Users, Search, Shield, Mail, Key, Copy, Check, 
   UserCheck, UserX, MoreVertical, ExternalLink, ShieldCheck, AlertCircle,
-  Edit2, X, Calendar, GraduationCap, Briefcase, Trash2
+  Edit2, X, Calendar, GraduationCap, Briefcase, Trash2, User as UserIcon
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import toast from 'react-hot-toast';
@@ -36,11 +36,8 @@ export default function TeacherManagement() {
           getDocs(collection(db, 'levels')),
           getDocs(collection(db, 'cycles'))
         ]);
-        const uniqueTeachers = Array.from(new Map(usersSnap.docs.map(d => {
-          const teacher = { uid: d.id, ...d.data() } as User;
-          return [teacher.email, teacher];
-        })).values());
-        setTeachers(uniqueTeachers);
+        const teachersList = usersSnap.docs.map(d => ({ uid: d.id, ...d.data() } as User));
+        setTeachers(teachersList);
         setSpecialties(specialtiesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Specialty)));
         setLevels(levelsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Level)));
         setCycles(cyclesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Cycle)));
@@ -60,57 +57,35 @@ export default function TeacherManagement() {
   };
 
   const handleActivate = async (teacher: User) => {
-    const { username, password } = generateCredentials(teacher.email);
+    const username = teacher.email.split('@')[0].toLowerCase();
     const loadingToast = toast.loading(t('activation_in_progress', { name: teacher.displayName }));
     
-    // Create a secondary app instance to create the user in Auth without logging out the admin
-    const secondaryApp = initializeApp(firebaseConfig, 'SecondaryApp');
-    const secondaryAuth = getAuth(secondaryApp);
-
     try {
-      // 1. Create user in Firebase Auth
-      try {
-        await createUserWithEmailAndPassword(secondaryAuth, teacher.email, password);
-      } catch (authErr: any) {
-        // If user already exists in Auth, we just continue to update Firestore
-        if (authErr.code !== 'auth/email-already-in-use') {
-          throw authErr;
-        }
-      }
-
-      // 2. Update Firestore
+      // Update Firestore
       const batch = writeBatch(db);
       
-      // Update user doc
-      batch.update(doc(db, 'users', teacher.uid), {
+      const updateData: any = {
         isActive: true,
         username,
-        password,
         lastEmailSent: null
-      });
+      };
       
-      // Update username mapping
-      batch.set(doc(db, 'usernames', username.toLowerCase()), { email: teacher.email });
+      batch.update(doc(db, 'users', teacher.uid), updateData);
+      batch.set(doc(db, 'usernames', username), { email: teacher.email });
       
       await batch.commit();
       
-      setTeachers(prev => prev.map(t => t.uid === teacher.uid ? { ...t, isActive: true, username, password } : t));
+      setTeachers(prev => prev.map(t => t.uid === teacher.uid ? { ...t, ...updateData } : t));
       toast.dismiss(loadingToast);
       toast.success(t('activation_success', { name: teacher.displayName }));
     } catch (err: any) {
       toast.dismiss(loadingToast);
       console.error('Activation error:', err);
-      if (err.code === 'auth/operation-not-allowed') {
-        toast.error(t('auth_not_allowed'));
-      } else {
-        handleFirestoreError(err, OperationType.UPDATE, `users/${teacher.uid}`);
-        toast.error(t('activation_error'));
-      }
-    } finally {
-      // Clean up secondary app
-      await deleteApp(secondaryApp);
+      toast.error(t('activation_error') + ': ' + (err.message || 'Unknown error'));
     }
   };
+
+  // handleResetPassword is no longer needed with Google login
 
   const handleUpdateTeacher = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -121,13 +96,22 @@ export default function TeacherManagement() {
     const employmentType = formData.get('employmentType') as EmploymentType;
     const role = formData.get('role') as UserRole;
     const displayName = formData.get('displayName') as string;
+    const email = formData.get('email') as string;
     
     const updateData: any = {
       rank,
       employmentType,
       role,
-      displayName
+      displayName,
+      email
     };
+
+    // If email changed, we need to update username mapping if user is active
+    const emailChanged = email !== editingTeacher.email;
+    if (emailChanged && editingTeacher.isActive) {
+      const newUsername = email.split('@')[0].toLowerCase();
+      updateData.username = newUsername;
+    }
 
     if (role === 'specialty_manager') {
       let selectedSpecialtyIds = Array.from(formData.getAll('specialtyIds')) as string[];
@@ -171,10 +155,27 @@ export default function TeacherManagement() {
     }
 
     try {
-      await updateDoc(doc(db, 'users', editingTeacher.uid), updateData);
+      const batch = writeBatch(db);
+      batch.update(doc(db, 'users', editingTeacher.uid), updateData);
+      
+      if (emailChanged && editingTeacher.isActive) {
+        const oldUsername = editingTeacher.username?.toLowerCase();
+        const newUsername = updateData.username.toLowerCase();
+        
+        if (oldUsername) {
+          batch.delete(doc(db, 'usernames', oldUsername));
+        }
+        batch.set(doc(db, 'usernames', newUsername), { email });
+      }
+      
+      await batch.commit();
+      
       setTeachers(prev => prev.map(t => t.uid === editingTeacher.uid ? { ...t, ...updateData } : t));
       setEditingTeacher(null);
       toast.success(t('update_success'));
+      if (emailChanged) {
+        alert(t('email_change_auth_warning'));
+      }
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `users/${editingTeacher.uid}`);
       toast.error(t('update_error'));
@@ -195,10 +196,17 @@ export default function TeacherManagement() {
 
   const handleDeleteTeacher = async () => {
     if (!teacherToDelete) return;
-    const { uid, name } = teacherToDelete;
+    const { uid } = teacherToDelete;
+    const teacher = teachers.find(t => t.uid === uid);
     
     try {
-      await deleteDoc(doc(db, 'users', uid));
+      const batch = writeBatch(db);
+      batch.delete(doc(db, 'users', uid));
+      if (teacher?.username) {
+        batch.delete(doc(db, 'usernames', teacher.username.toLowerCase()));
+      }
+      await batch.commit();
+      
       setTeachers(prev => prev.filter(t => t.uid !== uid));
       toast.success(t('delete_success'));
       setTeacherToDelete(null);
@@ -210,7 +218,7 @@ export default function TeacherManagement() {
   };
 
   const handleSendEmail = async (teacher: User) => {
-    if (!teacher.username || !teacher.password) return;
+    if (!teacher.username) return;
     
     const loadingToast = toast.loading(t('sending_data'));
     try {
@@ -224,11 +232,10 @@ export default function TeacherManagement() {
             <div style="font-family: Arial, sans-serif; direction: ${isRTL ? 'rtl' : 'ltr'}; text-align: ${isRTL ? 'right' : 'left'}; padding: 20px; border: 1px solid #e5e7eb; border-radius: 8px;">
               <h2 style="color: #1e40af;">${t('mechanical_engineering')}</h2>
               <p>${t('email_hello')} <strong>${teacher.displayName}</strong>،</p>
-              <p>${t('email_credentials_desc')}</p>
+              <p>${t('email_credentials_desc_google')}</p>
               <div style="background-color: #f3f4f6; padding: 15px; border-radius: 6px; margin: 20px 0;">
                 <p style="margin: 5px 0;"><strong>${t('username')}:</strong> ${teacher.username}</p>
-                <p style="margin: 5px 0;"><strong>${t('password')}:</strong> ${teacher.password}</p>
-                <p style="margin: 5px 0; color: #ef4444; font-size: 0.9em;">* ${t('email_change_password_warning')}</p>
+                <p style="margin: 5px 0; color: #1e40af; font-size: 0.9em;">* ${t('use_google_login_note')}</p>
               </div>
               <p>${t('email_access_link')}</p>
               <a href="${window.location.origin}" style="display: inline-block; background-color: #2563eb; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; margin-top: 10px;">${t('access_system')}</a>
@@ -473,23 +480,19 @@ export default function TeacherManagement() {
                 <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 space-y-3">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2 text-xs font-bold text-slate-400 uppercase tracking-widest">
-                      <Key className="w-3 h-3" /> {t('credentials')}
+                      <UserIcon className="w-3 h-3" /> {t('account_info')}
                     </div>
                     <button 
-                      onClick={() => copyToClipboard(`Username: ${teacher.username}\nPassword: ${teacher.password}`, teacher.uid)}
+                      onClick={() => copyToClipboard(`Username: ${teacher.username}`, teacher.uid)}
                       className="text-blue-600 hover:text-blue-700 transition-colors"
                     >
                       {copiedId === teacher.uid ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                     </button>
                   </div>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 gap-4">
                     <div>
                       <p className="text-[10px] text-slate-400 font-bold uppercase">{t('username')}</p>
                       <p className="text-sm font-mono font-bold text-slate-700">{teacher.username}</p>
-                    </div>
-                    <div>
-                      <p className="text-[10px] text-slate-400 font-bold uppercase">{t('password')}</p>
-                      <p className="text-sm font-mono font-bold text-slate-700">{teacher.password}</p>
                     </div>
                   </div>
                 </div>
@@ -567,6 +570,10 @@ export default function TeacherManagement() {
                 <div className="space-y-2">
                   <label className="text-sm font-bold text-slate-700">{t('full_name')}</label>
                   <input name="displayName" defaultValue={editingTeacher.displayName} required className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500" />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-bold text-slate-700">{t('email')}</label>
+                  <input name="email" type="email" defaultValue={editingTeacher.email} required className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500" />
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-bold text-slate-700">{t('rank')}</label>
@@ -741,6 +748,13 @@ export default function TeacherManagement() {
             <div>
               <h3 className="text-xl font-bold text-slate-900">{t('delete_confirm_title')}</h3>
               <p className="text-slate-500 mt-2">{t('delete_confirm_desc', { name: teacherToDelete.name })}</p>
+              <div className="mt-4 p-4 bg-amber-50 border border-amber-100 rounded-2xl text-amber-700 text-xs font-medium space-y-2 text-right">
+                <p className="font-bold flex items-center gap-1 justify-end">
+                  {t('important_note')}
+                  <AlertCircle className="w-4 h-4" />
+                </p>
+                <p>{t('delete_auth_manual_warning')}</p>
+              </div>
             </div>
             <div className="flex gap-3">
               <button 

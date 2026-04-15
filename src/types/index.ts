@@ -28,16 +28,23 @@ export interface User {
   lastEmailSent?: string | null;
 }
 
+export interface MonthlyHours {
+  month: string;
+  hours: number;
+}
+
 export interface OvertimeRequest {
   id: string;
   teacherId: string;
-  month: string;
   semester: 'S1' | 'S2';
   weeklyQuota: number;
   actualWeeklyHours: number;
-  overtimeHours: number;
+  monthlyBreakdown: MonthlyHours[];
+  totalOvertimeHours: number;
   status: 'Pending' | 'Approved' | 'Rejected';
+  academicYear: string;
   createdAt: string;
+  notes?: string;
 }
 
 export interface Cycle {
