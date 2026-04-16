@@ -11,7 +11,7 @@ import {
   Calendar, Clock, MapPin, User as UserIcon, 
   Plus, Trash2, Edit2, Download, Filter,
   ChevronRight, ChevronLeft, Search, ClipboardList,
-  AlertTriangle, Mail, Copy, X
+  AlertTriangle, Mail, Copy, X, ShieldAlert, ShieldCheck
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import jsPDF from 'jspdf';
@@ -139,6 +139,19 @@ export default function Schedules() {
   const [promptValue, setPromptValue] = useState('');
   const [appLogo, setAppLogo] = useState<string | null>(localStorage.getItem('appLogo'));
   const [sessionToDelete, setSessionToDelete] = useState<{ id: string, type: 'schedule' | 'exam' } | null>(null);
+  const [confirmState, setConfirmState] = useState<{
+    show: boolean;
+    title: string;
+    message: string;
+    type: 'danger' | 'warning' | 'info';
+    onConfirm: () => void;
+  }>({
+    show: false,
+    title: '',
+    message: '',
+    type: 'info',
+    onConfirm: () => {},
+  });
   const invigilationRef = React.useRef<HTMLDivElement>(null);
   const weeklyScheduleRef = React.useRef<HTMLDivElement>(null);
 
@@ -203,9 +216,48 @@ export default function Schedules() {
 
   const getTeacherExamCount = (teacherId: string) => {
     return examSessions.filter(s => {
+      if (s.semester !== selectedSemester) return false;
       if (s.mode === 'Simple') return s.invigilators?.includes(teacherId);
       return s.roomAssignments?.some(ra => ra.invigilators.includes(teacherId));
     }).length;
+  };
+
+  const getConflict = (exam: Partial<ExamSession>) => {
+    if (!exam.date || !exam.time) return null;
+    
+    const examSpec = specialties.find(s => s.id === exam.specialtyId);
+    for (const other of examSessions) {
+      if (other.id === exam.id) continue;
+      if (other.date !== exam.date || other.time !== exam.time) continue;
+      
+      // Specialty/Level conflict
+      const otherSpec = specialties.find(s => s.id === other.specialtyId);
+      if (other.specialtyId === exam.specialtyId && otherSpec?.levelId === examSpec?.levelId) {
+        return { type: 'تخصص', name: otherSpec?.name || '' };
+      }
+
+      // Room conflict (only if same semester)
+      if (other.semester === exam.semester && other.moduleId !== exam.moduleId) {
+        const rooms1 = exam.mode === 'Simple' ? (exam.roomIds || []) : exam.roomAssignments?.map(ra => ra.roomId) || [];
+        const rooms2 = other.mode === 'Simple' ? (other.roomIds || []) : other.roomAssignments?.map(ra => ra.roomId) || [];
+        const conflictingRoomId = rooms1.find(r => r && rooms2.includes(r));
+        if (conflictingRoomId) {
+          const room = rooms.find(r => r.id === conflictingRoomId);
+          return { type: 'قاعة', name: room?.name || '' };
+        }
+      }
+
+      // Teacher conflict
+      const invigs1 = exam.mode === 'Simple' ? exam.invigilators : exam.roomAssignments?.flatMap(ra => ra.invigilators) || [];
+      const invigs2 = other.mode === 'Simple' ? other.invigilators : other.roomAssignments?.flatMap(ra => ra.invigilators) || [];
+      const conflictingTeacherId = invigs1?.find(id => invigs2?.includes(id));
+      if (conflictingTeacherId) {
+        const teacher = teachers.find(t => t.uid === conflictingTeacherId);
+        return { type: 'أستاذ', name: teacher?.displayName || '' };
+      }
+    }
+
+    return null;
   };
 
   const handleUpdateTimeForSpecialty = async (specId: string, newTime: string, scope: 'specialty' | 'level' | 'all' = 'specialty', currentSessions?: ExamSession[]) => {
@@ -360,55 +412,132 @@ export default function Schedules() {
   };
 
   const handleCopySchedule = async () => {
-    const nextYear = prompt('أدخل السنة الدراسية المستهدفة للنسخ (مثال: 2026/2027):');
-    if (!nextYear) return;
+    setPromptConfig({
+      show: true,
+      title: 'نسخ الجداول لسنة جديدة:',
+      defaultValue: '',
+      type: 'text',
+      onConfirm: (nextYear) => {
+        if (!nextYear) return;
+        setConfirmState({
+          show: true,
+          title: 'تأكيد النسخ',
+          message: `هل أنت متأكد من نسخ جداول السنة ${selectedYear} إلى السنة ${nextYear}؟`,
+          type: 'warning',
+          onConfirm: async () => {
+            setConfirmState(prev => ({ ...prev, show: false }));
+            setCopying(true);
+            const toastId = toast.loading('جاري نسخ الجداول...');
 
-    if (!window.confirm(`هل أنت متأكد من نسخ جداول السنة ${selectedYear} إلى السنة ${nextYear}؟`)) return;
+            try {
+              // 1. Copy Modules first (as sessions depend on them)
+              const modulesToCopy = modules;
+              const moduleMapping: Record<string, string> = {};
 
-    setCopying(true);
-    const toastId = toast.loading('جاري نسخ الجداول...');
+              for (const mod of modulesToCopy) {
+                const { id, ...modData } = mod;
+                const newMod = { ...modData, academicYear: nextYear };
+                const docRef = await addDoc(collection(db, 'modules'), newMod);
+                moduleMapping[id] = docRef.id;
+              }
 
-    try {
-      // 1. Copy Modules first (as sessions depend on them)
-      const modulesToCopy = modules;
-      const moduleMapping: Record<string, string> = {};
+              // 2. Copy Schedule Sessions
+              for (const session of scheduleSessions) {
+                const { id, ...sessionData } = session;
+                const newSession = { 
+                  ...sessionData, 
+                  academicYear: nextYear,
+                  moduleId: moduleMapping[session.moduleId] || session.moduleId 
+                };
+                await addDoc(collection(db, 'scheduleSessions'), newSession);
+              }
 
-      for (const mod of modulesToCopy) {
-        const { id, ...modData } = mod;
-        const newMod = { ...modData, academicYear: nextYear };
-        const docRef = await addDoc(collection(db, 'modules'), newMod);
-        moduleMapping[id] = docRef.id;
+              // 3. Copy Exam Sessions
+              for (const exam of examSessions) {
+                const { id, ...examData } = exam;
+                const newExam = {
+                  ...examData,
+                  academicYear: nextYear,
+                  moduleId: moduleMapping[exam.moduleId] || exam.moduleId
+                };
+                await addDoc(collection(db, 'examSessions'), newExam);
+              }
+
+              toast.success('تم نسخ الجداول والامتحانات بنجاح', { id: toastId });
+            } catch (err) {
+              console.error('Copy failed:', err);
+              toast.error('فشل نسخ الجداول', { id: toastId });
+            } finally {
+              setCopying(false);
+            }
+          }
+        });
       }
+    });
+  };
 
-      // 2. Copy Schedule Sessions
-      for (const session of scheduleSessions) {
-        const { id, ...sessionData } = session;
-        const newSession = { 
-          ...sessionData, 
-          academicYear: nextYear,
-          moduleId: moduleMapping[session.moduleId] || session.moduleId 
-        };
-        await addDoc(collection(db, 'scheduleSessions'), newSession);
+  const handleDeleteAllExams = async () => {
+    setConfirmState({
+      show: true,
+      title: 'حذف جميع الامتحانات',
+      message: `هل أنت متأكد من حذف جميع امتحانات السنة ${selectedYear} السداسي ${selectedSemester === 'S1' ? 'الأول' : 'الثاني'}؟`,
+      type: 'danger',
+      onConfirm: async () => {
+        setConfirmState(prev => ({ ...prev, show: false }));
+        const toastId = toast.loading('جاري المسح...');
+        try {
+          const examsToDelete = examSessions.filter(s => s.semester === selectedSemester);
+          
+          for (const exam of examsToDelete) {
+            await deleteDoc(doc(db, 'examSessions', exam.id));
+          }
+
+          setExamSessions(prev => prev.filter(e => e.semester !== selectedSemester));
+          toast.success('تم حذف جميع الامتحانات المختارة بنجاح', { id: toastId });
+        } catch (err) {
+          console.error('Delete failed:', err);
+          toast.error('فشل حذف الامتحانات', { id: toastId });
+        }
       }
+    });
+  };
 
-      // 3. Copy Exam Sessions
-      for (const exam of examSessions) {
-        const { id, ...examData } = exam;
-        const newExam = {
-          ...examData,
-          academicYear: nextYear,
-          moduleId: moduleMapping[exam.moduleId] || exam.moduleId
-        };
-        await addDoc(collection(db, 'examSessions'), newExam);
+  const handleCleanupInvisibleExams = async () => {
+    setConfirmState({
+      show: true,
+      title: 'تنظيف الامتحانات الوهمية',
+      message: 'هل تريد حذف جميع الامتحانات الوهمية (غير المرتبطة بتخصص أو مادة موجودة)؟',
+      type: 'warning',
+      onConfirm: async () => {
+        setConfirmState(prev => ({ ...prev, show: false }));
+        const toastId = toast.loading('جاري تنظيف الامتحانات الوهمية...');
+        try {
+          // Invisible exams are for current year but specialty or module is missing, or missing date/time
+          const invisibleExams = examSessions.filter(exam => {
+            const hasSpecialty = specialties.some(s => s.id === exam.specialtyId);
+            const hasModule = modules.some(m => m.id === exam.moduleId);
+            const hasDate = !!exam.date;
+            const hasTime = !!exam.time;
+            return !hasSpecialty || !hasModule || !hasDate || !hasTime;
+          });
+
+          if (invisibleExams.length === 0) {
+            toast.success('لا توجد امتحانات وهمية لحذفها', { id: toastId });
+            return;
+          }
+
+          for (const exam of invisibleExams) {
+            await deleteDoc(doc(db, 'examSessions', exam.id));
+          }
+
+          setExamSessions(prev => prev.filter(e => !invisibleExams.map(ie => ie.id).includes(e.id)));
+          toast.success(`تم حذف ${invisibleExams.length} امتحان وهمي بنجاح`, { id: toastId });
+        } catch (err) {
+          console.error('Cleanup failed:', err);
+          toast.error('فشل عملية التنظيف', { id: toastId });
+        }
       }
-
-      toast.success('تم نسخ الجداول والامتحانات بنجاح', { id: toastId });
-    } catch (err) {
-      console.error('Copy failed:', err);
-      toast.error('فشل نسخ الجداول', { id: toastId });
-    } finally {
-      setCopying(false);
-    }
+    });
   };
 
   const handleAddSession = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -1084,8 +1213,13 @@ export default function Schedules() {
   const handleAddExam = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!isAdmin && !isViceAdmin) return;
-    const formData = new FormData(e.currentTarget);
     
+    // Validation
+    if (!examModule || !examSpecialty || !examDate || !examTime) {
+      toast.error('يرجى ملء جميع البيانات الأساسية');
+      return;
+    }
+
     const examData: any = {
       moduleId: examModule,
       specialtyId: examSpecialty,
@@ -1098,10 +1232,24 @@ export default function Schedules() {
     };
 
     if (examMode === 'Simple') {
+      if (examRooms.length === 0) {
+        toast.error('يجب اختيار قاعة واحدة على الأقل');
+        return;
+      }
+      if (examInvigilators.length === 0) {
+        toast.error('يجب اختيار حارس واحد على الأقل');
+        return;
+      }
       examData.roomIds = examRooms;
       examData.invigilators = examInvigilators;
+      const formData = new FormData(e.currentTarget);
       examData.studentCount = formExamType === 'Resit' ? Number(formData.get('studentCount')) || 0 : 0;
     } else {
+      const invalid = roomAssignments.some(ra => !ra.roomId || !ra.invigilators || ra.invigilators.length === 0);
+      if (invalid) {
+        toast.error('يرجى اختيار القاعة وجميع الحراس لكل تعيين');
+        return;
+      }
       examData.roomAssignments = roomAssignments;
     }
 
@@ -1143,14 +1291,31 @@ export default function Schedules() {
         </div>
         <div className="flex gap-2">
           {(isAdmin || isViceAdmin) && (
-            <button 
-              onClick={handleCopySchedule}
-              disabled={copying}
-              className="flex items-center gap-2 px-4 py-2 bg-amber-50 text-amber-600 rounded-xl hover:bg-amber-100 transition-all shadow-sm border border-amber-100"
-            >
-              <Copy className="w-4 h-4" />
-              <span>نسخ للسنة القادمة</span>
-            </button>
+            <>
+              <button 
+                onClick={handleCopySchedule}
+                disabled={copying}
+                className="flex items-center gap-2 px-4 py-2 bg-amber-50 text-amber-600 rounded-xl hover:bg-amber-100 transition-all shadow-sm border border-amber-100"
+              >
+                <Copy className="w-4 h-4" />
+                <span>نسخ للسنة القادمة</span>
+              </button>
+              <button 
+                onClick={handleCleanupInvisibleExams}
+                className="flex items-center gap-2 px-4 py-2 bg-slate-50 text-slate-600 rounded-xl hover:bg-slate-100 transition-all shadow-sm border border-slate-100"
+                title="حذف الامتحانات المتبقية لمواد أو تخصصات محذوفة"
+              >
+                <ShieldAlert className="w-4 h-4" />
+                <span>تنظيف الوهمي</span>
+              </button>
+              <button 
+                onClick={handleDeleteAllExams}
+                className="flex items-center gap-2 px-4 py-2 bg-red-50 text-red-600 rounded-xl hover:bg-red-100 transition-all shadow-sm border border-red-100"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>حذف الكل</span>
+              </button>
+            </>
           )}
           <button 
             onClick={() => {
@@ -1701,44 +1866,7 @@ export default function Schedules() {
                                   }
                                 };
 
-                                 const getConflict = (exam: ExamSession) => {
-                                   const examSpec = specialties.find(s => s.id === exam.specialtyId);
-                                   const other = examSessions.find(other => {
-                                     if (other.id === exam.id) return false;
-                                     if (other.date !== exam.date || other.time !== exam.time) return false;
-                                     
-                                     // Specialty/Level conflict
-                                     const otherSpec = specialties.find(s => s.id === other.specialtyId);
-                                     if (other.specialtyId === exam.specialtyId && otherSpec?.levelId === examSpec?.levelId) return true;
-
-                                     // Room conflict (only if same semester)
-                                     if (other.semester === exam.semester && other.moduleId !== exam.moduleId) {
-                                       const rooms1 = exam.mode === 'Simple' ? (exam.roomIds || []) : exam.roomAssignments?.map(ra => ra.roomId) || [];
-                                       const rooms2 = other.mode === 'Simple' ? (other.roomIds || []) : other.roomAssignments?.map(ra => ra.roomId) || [];
-                                       if (rooms1.some(r => r && rooms2.includes(r))) return true;
-                                     }
-
-                                     // Teacher conflict
-                                     const invigs1 = exam.mode === 'Simple' ? exam.invigilators : exam.roomAssignments?.flatMap(ra => ra.invigilators) || [];
-                                     const invigs2 = other.mode === 'Simple' ? other.invigilators : other.roomAssignments?.flatMap(ra => ra.invigilators) || [];
-                                     if (invigs1?.some(id => invigs2?.includes(id))) return true;
-
-                                     return false;
-                                   });
-
-                                   if (!other) return null;
-
-                                   const otherSpec = specialties.find(s => s.id === other.specialtyId);
-                                   if (other.specialtyId === exam.specialtyId && otherSpec?.levelId === examSpec?.levelId) return 'تخصص';
-                                   if (other.semester === exam.semester && other.moduleId !== exam.moduleId) {
-                                     const rooms1 = exam.mode === 'Simple' ? (exam.roomIds || []) : exam.roomAssignments?.map(ra => ra.roomId) || [];
-                                     const rooms2 = other.mode === 'Simple' ? (other.roomIds || []) : other.roomAssignments?.map(ra => ra.roomId) || [];
-                                     if (rooms1.some(r => r && rooms2.includes(r))) return 'قاعة';
-                                   }
-                                   return 'أستاذ';
-                                 };
-
-                                 const conflictType = getConflict(exam);
+                                 const conflict = getConflict(exam) as { type: string, name: string } | null;
 
                                  return (
                                    <div 
@@ -1746,7 +1874,7 @@ export default function Schedules() {
                                      className={cn(
                                        "mb-3 p-4 rounded-2xl border transition-all relative group shadow-sm hover:shadow-lg hover:-translate-y-0.5",
                                        exam.type === 'Regular' ? "bg-white border-slate-200" : "bg-orange-50 border-orange-200",
-                                       conflictType && "border-red-500 ring-2 ring-red-500/20"
+                                       conflict && "border-red-500 ring-2 ring-red-500/20"
                                      )}
                                      onClick={(e) => {
                                        if (!isAdmin && !isViceAdmin) return;
@@ -1767,9 +1895,9 @@ export default function Schedules() {
                                        setShowAddModal(true);
                                      }}
                                    >
-                                     {conflictType && (
+                                     {conflict && (
                                        <div className="absolute -top-2.5 -right-2.5 bg-red-600 text-white text-[9px] px-2 py-1 rounded-full font-bold shadow-xl z-10 animate-pulse">
-                                         تضارب {conflictType}!
+                                         تضارب {conflict.type}: {conflict.name}
                                        </div>
                                      )}
                                     <div className="flex justify-end items-start mb-2">
@@ -2179,15 +2307,17 @@ export default function Schedules() {
                       return isAssigned && s.semester === selectedSemester;
                     }).map(exam => {
                       const module = modules.find(m => m.id === exam.moduleId);
-                      const specialty = specialties.find(s => s.id === exam.specialtyId);
+                      const specialty = specialties.find(s => s.id === (exam.specialtyId || module?.specialtyId));
                       
                       let roomInfo = '';
-                      if (exam.mode === 'Simple') {
+                      const mode = exam.mode || (exam.roomAssignments && exam.roomAssignments.length > 0 ? 'Detailed' : 'Simple');
+                      
+                      if (mode === 'Simple') {
                         roomInfo = exam.roomIds?.map(id => rooms.find(r => r.id === id)?.name).filter(Boolean).join(' + ') || '';
                       } else {
                         const myAssignment = exam.roomAssignments?.find(ra => ra.invigilators.includes(selectedTeacherId || ''));
                         const room = rooms.find(r => r.id === myAssignment?.roomId);
-                        roomInfo = `${room?.name || ''} ${myAssignment?.groups ? `(${myAssignment.groups.join(', ')})` : ''}`;
+                        roomInfo = room ? `${room.name}${myAssignment?.groups?.length ? ` (${myAssignment.groups.join(', ')})` : ''}` : '';
                       }
 
                       return (
@@ -2432,38 +2562,48 @@ export default function Schedules() {
               </form>
             ) : (
               <form onSubmit={handleAddExam} className="flex flex-col h-full max-h-[85vh]">
-                <div className="p-6 overflow-y-auto space-y-4 flex-1">
-                  <div className="flex gap-4 p-1 bg-slate-100 rounded-xl mb-4">
+                <div className="p-6 overflow-y-auto space-y-6 flex-1">
+                  {/* Mode Toggle */}
+                  <div className="flex p-1.5 bg-slate-100 rounded-2xl">
                     <button
                       type="button"
                       onClick={() => setExamMode('Simple')}
                       className={cn(
-                        "flex-1 py-2 rounded-lg text-sm font-bold transition-all",
-                        examMode === 'Simple' ? "bg-white text-blue-600 shadow-sm" : "text-slate-500"
+                        "flex-1 py-3 rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-2",
+                        examMode === 'Simple' ? "bg-white text-blue-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
                       )}
                     >
-                      الوضع البسيط (Simple)
+                      <ClipboardList className="w-4 h-4" />
+                      الوضع البسيط
                     </button>
                     <button
                       type="button"
                       onClick={() => setExamMode('Detailed')}
                       className={cn(
-                        "flex-1 py-2 rounded-lg text-sm font-bold transition-all",
-                        examMode === 'Detailed' ? "bg-white text-blue-600 shadow-sm" : "text-slate-500"
+                        "flex-1 py-3 rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-2",
+                        examMode === 'Detailed' ? "bg-white text-blue-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
                       )}
                     >
-                      الوضع التفصيلي (Detailed)
+                      <ClipboardList className="w-4 h-4" />
+                      الوضع التفصيلي
                     </button>
                   </div>
 
-                    <div className="grid grid-cols-2 gap-4">
+                  {/* Basic Info Section */}
+                  <div className="space-y-4">
+                    <div className="flex items-center gap-2 text-blue-600">
+                      <Calendar className="w-5 h-5" />
+                      <h3 className="font-bold">المعلومات الأساسية</h3>
+                    </div>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div className="space-y-2">
                         <label className="text-sm font-bold text-slate-700">التخصص</label>
                         <select 
                           required 
                           value={examSpecialty}
                           onChange={(e) => setExamSpecialty(e.target.value)}
-                          className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-slate-900"
+                          className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-slate-900 focus:ring-2 focus:ring-blue-500/20"
                         >
                           <option value="" className="text-slate-900">اختر التخصص</option>
                           {specialties
@@ -2480,30 +2620,22 @@ export default function Schedules() {
                           onChange={(e) => {
                             const modId = e.target.value;
                             setExamModule(modId);
-                            // Auto-fill time if empty
                             if (!examTime) {
-                              // Try to find a time for this specialty in this semester
                               const specExams = examSessions.filter(s => s.specialtyId === examSpecialty && s.semester === selectedSemester);
-                              if (specExams.length > 0) {
-                                setExamTime(specExams[0].time);
-                              } else {
-                                // Try to find any exam on the same date
+                              if (specExams.length > 0) setExamTime(specExams[0].time);
+                              else {
                                 const dateExams = examSessions.filter(s => s.date === examDate);
-                                if (dateExams.length > 0) {
-                                  setExamTime(dateExams[0].time);
-                                }
+                                if (dateExams.length > 0) setExamTime(dateExams[0].time);
                               }
                             }
                           }}
-                          className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-slate-900"
+                          className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-slate-900 focus:ring-2 focus:ring-blue-500/20"
                         >
                           <option value="" className="text-slate-900">اختر المقياس</option>
                           {modules
                             .filter(m => m.specialtyId === examSpecialty && m.semester === selectedSemester)
                             .filter(m => {
-                              // If editing, allow the current module
                               if (editingExam && editingExam.moduleId === m.id) return true;
-                              // Otherwise, filter out modules that already have an exam session
                               return !examSessions.some(s => 
                                 s.moduleId === m.id && 
                                 s.semester === selectedSemester && 
@@ -2515,7 +2647,7 @@ export default function Schedules() {
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                       <div className="space-y-2">
                         <label className="text-sm font-bold text-slate-700">نوع الامتحان</label>
                         <select 
@@ -2523,7 +2655,7 @@ export default function Schedules() {
                           required 
                           value={formExamType}
                           onChange={(e) => setFormExamType(e.target.value as any)}
-                          className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-slate-900"
+                          className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-slate-900 focus:ring-2 focus:ring-blue-500/20"
                         >
                           <option value="Regular" className="text-slate-900">عادي (Regular)</option>
                           <option value="Resit" className="text-slate-900">استدراكي (Resit)</option>
@@ -2537,7 +2669,7 @@ export default function Schedules() {
                           required 
                           value={examDate}
                           onChange={(e) => setExamDate(e.target.value)}
-                          className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-slate-900" 
+                          className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-slate-900 focus:ring-2 focus:ring-blue-500/20" 
                         />
                       </div>
                       <div className="space-y-2">
@@ -2549,201 +2681,272 @@ export default function Schedules() {
                           required 
                           value={examTime}
                           onChange={(e) => setExamTime(e.target.value)}
-                          className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-slate-900" 
+                          className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-slate-900 focus:ring-2 focus:ring-blue-500/20" 
                         />
                         <datalist id="exam-times">
                           {EXAM_TIMES.map(t => <option key={t} value={t} />)}
                         </datalist>
-                        <div className="flex items-center gap-2 mt-2">
-                          <input 
-                            type="checkbox" 
-                            id="applyTimeToLevel"
-                            checked={applyTimeToLevel}
-                            onChange={(e) => setApplyTimeToLevel(e.target.checked)}
-                            className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
-                          />
-                          <label htmlFor="applyTimeToLevel" className="text-xs font-bold text-slate-600 cursor-pointer">
-                            تعميم هذا التوقيت على جميع تخصصات المستوى
-                          </label>
-                        </div>
                       </div>
                     </div>
 
+                    <div className="flex items-center gap-2 p-3 bg-blue-50 rounded-xl border border-blue-100">
+                      <input 
+                        type="checkbox" 
+                        id="applyTimeToLevel"
+                        checked={applyTimeToLevel}
+                        onChange={(e) => setApplyTimeToLevel(e.target.checked)}
+                        className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+                      />
+                      <label htmlFor="applyTimeToLevel" className="text-xs font-bold text-blue-700 cursor-pointer">
+                        تعميم هذا التوقيت على جميع تخصصات المستوى
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Conflict Alert */}
+                  {(() => {
+                    const conflict = getConflict({
+                      id: editingExam?.id,
+                      date: examDate,
+                      time: examTime,
+                      specialtyId: examSpecialty,
+                      moduleId: examModule,
+                      semester: selectedSemester,
+                      mode: examMode,
+                      roomIds: examRooms,
+                      invigilators: examInvigilators,
+                      roomAssignments: roomAssignments
+                    }) as { type: string, name: string } | null;
+
+                    if (conflict) {
+                      return (
+                        <div className="p-4 bg-red-50 border border-red-200 rounded-2xl flex items-start gap-3 animate-pulse">
+                          <AlertTriangle className="w-5 h-5 text-red-600 mt-0.5" />
+                          <div>
+                            <h4 className="font-bold text-red-900 text-sm">تنبيه تضارب!</h4>
+                            <p className="text-xs text-red-700 mt-1">
+                              يوجد تضارب من نوع <strong>({conflict.type})</strong> مع: <strong>{conflict.name}</strong> في نفس التوقيت.
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
+
+                  {/* Room & Invigilators Section */}
+                  <div className="space-y-4">
+                    <div className="flex items-center gap-2 text-orange-600">
+                      <MapPin className="w-5 h-5" />
+                      <h3 className="font-bold">توزيع القاعات والحراسة</h3>
+                    </div>
+
                     {examMode === 'Simple' ? (
-                      <>
-                        <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                           <div className="space-y-2">
-                            <label className="text-sm font-bold text-slate-700">القاعات (اختر 1 أو 2)</label>
-                            <select 
-                              name="roomIds" 
-                              multiple 
-                              required 
-                              value={examRooms}
-                              onChange={(e) => setExamRooms(Array.from(e.target.selectedOptions).map(o => o.value))}
-                              className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 h-24 text-slate-900"
-                            >
+                            <label className="text-sm font-bold text-slate-700">القاعات</label>
+                            <div className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 h-48 overflow-y-auto space-y-1 custom-scrollbar">
                               {[...rooms].sort((a, b) => {
                                 const order = { 'classroom': 1, 'lab': 2, 'amphi': 3 };
                                 return (order[a.type as keyof typeof order] || 99) - (order[b.type as keyof typeof order] || 99);
                               }).map(r => (
-                                <option key={r.id} value={r.id} className="text-slate-900">
-                                  {r.name} ({r.type === 'classroom' ? 'أعمال موجهة' : r.type === 'lab' ? 'أعمال تطبيقية' : 'مدرج'})
-                                </option>
+                                <label key={r.id} className={cn(
+                                  "flex items-center gap-3 p-2 rounded-lg cursor-pointer transition-all border border-transparent",
+                                  examRooms.includes(r.id) ? "bg-blue-50 border-blue-100" : "hover:bg-white hover:border-slate-200"
+                                )}>
+                                  <input 
+                                    type="checkbox"
+                                    checked={examRooms.includes(r.id)}
+                                    onChange={() => {
+                                      setExamRooms(prev => 
+                                        prev.includes(r.id) ? prev.filter(id => id !== r.id) : [...prev, r.id]
+                                      );
+                                    }}
+                                    className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+                                  />
+                                  <div className="flex flex-col">
+                                    <span className="text-sm text-slate-700 font-bold">{r.name}</span>
+                                    <span className="text-[10px] text-slate-400 capitalize">
+                                      {r.type === 'classroom' ? 'أعمال موجهة' : r.type === 'lab' ? 'أعمال تطبيقية' : 'مدرج'}
+                                    </span>
+                                  </div>
+                                </label>
                               ))}
-                            </select>
-                            <p className="text-[10px] text-slate-400">استخدم Ctrl/Cmd لاختيار قاعتين</p>
-                          </div>
-                          {formExamType === 'Resit' && (
-                            <div className="space-y-2">
-                              <label className="text-sm font-bold text-slate-700">عدد الطلبة الراسبين</label>
-                              <input 
-                                type="number" 
-                                name="studentCount" 
-                                placeholder="مثلاً: 15" 
-                                defaultValue={editingExam?.studentCount || ''}
-                                className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-slate-900" 
-                              />
                             </div>
-                          )}
+                            <p className="text-[10px] text-slate-400">يمكنك اختيار قاعة واحدة أو أكثر</p>
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-sm font-bold text-slate-700">الأساتذة الحراس</label>
+                            <div className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 h-48 overflow-y-auto space-y-1 custom-scrollbar">
+                              {teachers.map(t => {
+                                const count = getTeacherExamCount(t.uid);
+                                const isSelected = examInvigilators.includes(t.uid);
+                                return (
+                                  <label key={t.uid} className={cn(
+                                    "flex items-center gap-3 p-2 rounded-lg cursor-pointer transition-all border border-transparent",
+                                    isSelected ? "bg-blue-50 border-blue-100" : "hover:bg-white hover:border-slate-200"
+                                  )}>
+                                    <input 
+                                      type="checkbox"
+                                      checked={isSelected}
+                                      onChange={() => {
+                                        setExamInvigilators(prev => 
+                                          prev.includes(t.uid) ? prev.filter(id => id !== t.uid) : [...prev, t.uid]
+                                        );
+                                      }}
+                                      className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+                                    />
+                                    <div className="flex flex-col">
+                                      <span className={cn("text-sm font-bold", count >= 4 ? "text-red-600" : "text-slate-700")}>
+                                        {t.displayName}
+                                      </span>
+                                      <span className="text-[10px] text-slate-400">
+                                        الحراسات: {count}
+                                      </span>
+                                    </div>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                            <p className="text-[10px] text-slate-400">يمكنك اختيار أكثر من أستاذ</p>
+                          </div>
                         </div>
 
-                        <div className="space-y-2">
-                          <label className="text-sm font-bold text-slate-700">الأساتذة الحراس (اختر متعدد)</label>
-                          <select 
-                            name="invigilators" 
-                            multiple 
-                            required 
-                            value={examInvigilators}
-                            onChange={(e) => setExamInvigilators(Array.from(e.target.selectedOptions).map(o => o.value))}
-                            className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 h-32 text-slate-900"
-                          >
-                            {teachers.map(t => {
-                              const count = getTeacherExamCount(t.uid);
-                              return (
-                                <option key={t.uid} value={t.uid} className={cn("text-slate-900", count >= 4 && "text-red-600 font-bold")}>
-                                  {t.displayName} ({count} حصص)
-                                </option>
-                              );
-                            })}
-                          </select>
-                          <p className="text-[10px] text-slate-400">استخدم Ctrl/Cmd لاختيار أكثر من أستاذ</p>
-                          {examInvigilators.some(id => getTeacherExamCount(id) >= 4) && (
-                            <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-xl flex items-center gap-2 text-yellow-700 text-xs font-bold mt-2">
-                              <AlertTriangle className="w-4 h-4" />
-                              تنبيه: بعض الأساتذة المختارين لديهم 4 حصص حراسة أو أكثر!
-                            </div>
-                          )}
-                        </div>
-                      </>
-                  ) : (
-                    <div className="space-y-4">
-                      <div className="flex items-center justify-between">
-                        <label className="text-sm font-bold text-slate-700">تعيينات القاعات</label>
-                        <button
-                          type="button"
-                          onClick={() => setRoomAssignments([...roomAssignments, { roomId: '', invigilators: [], groups: [], studentCount: 0 }])}
-                          className="text-xs font-bold text-blue-600 hover:text-blue-700 flex items-center gap-1"
-                        >
-                          <Plus className="w-3 h-3" />
-                          إضافة قاعة
-                        </button>
-                      </div>
-                      
-                      {roomAssignments.map((ra, idx) => (
-                        <div key={idx} className="p-4 bg-slate-50 rounded-xl border border-slate-100 space-y-3 relative">
-                          {roomAssignments.length > 1 && (
-                            <button
-                              type="button"
-                              onClick={() => setRoomAssignments(roomAssignments.filter((_, i) => i !== idx))}
-                              className="absolute top-2 left-2 text-red-500 hover:text-red-600"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          )}
-                          <div className="grid grid-cols-2 gap-3">
-                            <div className="space-y-1">
-                              <label className="text-[10px] font-bold text-slate-500 uppercase">القاعة</label>
-                              <select
-                                value={ra.roomId}
-                                onChange={(e) => {
-                                  const newRa = [...roomAssignments];
-                                  newRa[idx].roomId = e.target.value;
-                                  setRoomAssignments(newRa);
-                                }}
-                                required
-                                className="w-full bg-white border-none rounded-lg px-3 py-2 text-sm text-slate-900"
-                              >
-                                <option value="">اختر القاعة</option>
-                                {[...rooms].sort((a, b) => {
-                                  const order = { 'classroom': 1, 'lab': 2, 'amphi': 3 };
-                                  return (order[a.type as keyof typeof order] || 99) - (order[b.type as keyof typeof order] || 99);
-                                }).map(r => (
-                                  <option key={r.id} value={r.id}>
-                                    {r.name} ({r.type === 'classroom' ? 'أعمال موجهة' : r.type === 'lab' ? 'أعمال تطبيقية' : 'مدرج'})
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                            {formExamType === 'Resit' && (
-                              <div className="space-y-1">
-                                <label className="text-[10px] font-bold text-slate-500 uppercase">عدد الطلبة الراسبين</label>
-                                <input
-                                  type="number"
-                                  value={ra.studentCount}
-                                  onChange={(e) => {
-                                    const newRa = [...roomAssignments];
-                                    newRa[idx].studentCount = Number(e.target.value);
-                                    setRoomAssignments(newRa);
-                                  }}
-                                  className="w-full bg-white border-none rounded-lg px-3 py-2 text-sm text-slate-900"
-                                />
-                              </div>
-                            )}
-                          </div>
-                          <div className="space-y-1">
-                            <label className="text-[10px] font-bold text-slate-500 uppercase">الأفواج (اختياري - مفصولة بفاصلة)</label>
-                            <input
-                              type="text"
-                              placeholder="G1, G2..."
-                              onChange={(e) => {
-                                const newRa = [...roomAssignments];
-                                newRa[idx].groups = e.target.value.split(',').map(s => s.trim()).filter(Boolean);
-                                setRoomAssignments(newRa);
-                              }}
-                              className="w-full bg-white border-none rounded-lg px-3 py-2 text-sm text-slate-900"
+                        {formExamType === 'Resit' && (
+                          <div className="space-y-2">
+                            <label className="text-sm font-bold text-slate-700">عدد الطلبة الراسبين</label>
+                            <input 
+                              type="number" 
+                              name="studentCount" 
+                              placeholder="مثلاً: 15" 
+                              defaultValue={editingExam?.studentCount || ''}
+                              className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-slate-900 focus:ring-2 focus:ring-blue-500/20" 
                             />
                           </div>
-                          <div className="space-y-1">
-                            <label className="text-[10px] font-bold text-slate-500 uppercase">الحراس</label>
-                            <select
-                              multiple
-                              value={ra.invigilators}
-                              onChange={(e) => {
-                                const newRa = [...roomAssignments];
-                                newRa[idx].invigilators = Array.from(e.target.selectedOptions).map(o => o.value);
-                                setRoomAssignments(newRa);
-                              }}
-                              required
-                              className="w-full bg-white border-none rounded-lg px-3 py-2 text-sm h-24 text-slate-900"
-                            >
-                              {teachers.map(t => <option key={t.uid} value={t.uid}>{t.displayName}</option>)}
-                            </select>
-                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        <div className="flex items-center justify-between">
+                          <label className="text-sm font-bold text-slate-700">تعيينات القاعات</label>
+                          <button
+                            type="button"
+                            onClick={() => setRoomAssignments([...roomAssignments, { roomId: '', invigilators: [], groups: [], studentCount: 0 }])}
+                            className="text-xs font-bold text-blue-600 hover:text-blue-700 flex items-center gap-1 bg-blue-50 px-3 py-1.5 rounded-lg border border-blue-100"
+                          >
+                            <Plus className="w-3 h-3" />
+                            إضافة قاعة
+                          </button>
                         </div>
-                      ))}
-                    </div>
-                  )}
+                        
+                        <div className="space-y-4">
+                          {roomAssignments.map((ra, idx) => (
+                            <div key={idx} className="p-5 bg-white rounded-2xl border border-slate-200 shadow-sm space-y-4 relative group/item">
+                              {roomAssignments.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => setRoomAssignments(roomAssignments.filter((_, i) => i !== idx))}
+                                  className="absolute top-4 left-4 text-slate-300 hover:text-red-500 transition-colors"
+                                >
+                                  <Trash2 className="w-5 h-5" />
+                                </button>
+                              )}
+                              
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div className="space-y-2">
+                                  <label className="text-xs font-bold text-slate-400 uppercase">القاعة</label>
+                                  <select
+                                    value={ra.roomId}
+                                    onChange={(e) => {
+                                      const newRa = [...roomAssignments];
+                                      newRa[idx].roomId = e.target.value;
+                                      setRoomAssignments(newRa);
+                                    }}
+                                    required
+                                    className="w-full bg-slate-50 border-none rounded-xl px-4 py-2.5 text-sm text-slate-900"
+                                  >
+                                    <option value="">اختر القاعة</option>
+                                    {[...rooms].sort((a, b) => {
+                                      const order = { 'classroom': 1, 'lab': 2, 'amphi': 3 };
+                                      return (order[a.type as keyof typeof order] || 99) - (order[b.type as keyof typeof order] || 99);
+                                    }).map(r => (
+                                      <option key={r.id} value={r.id}>
+                                        {r.name} ({r.type === 'classroom' ? 'أعمال موجهة' : r.type === 'lab' ? 'أعمال تطبيقية' : 'مدرج'})
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                                <div className="space-y-2">
+                                  <label className="text-xs font-bold text-slate-400 uppercase">الأفواج (G1, G2...)</label>
+                                  <input
+                                    type="text"
+                                    placeholder="مثال: G1, G2"
+                                    value={ra.groups?.join(', ')}
+                                    onChange={(e) => {
+                                      const newRa = [...roomAssignments];
+                                      newRa[idx].groups = e.target.value.split(',').map(s => s.trim()).filter(Boolean);
+                                      setRoomAssignments(newRa);
+                                    }}
+                                    className="w-full bg-slate-50 border-none rounded-xl px-4 py-2.5 text-sm text-slate-900"
+                                  />
+                                </div>
+                              </div>
+
+                              <div className="space-y-2">
+                                <label className="text-xs font-bold text-slate-400 uppercase">الحراس لهذه القاعة</label>
+                                <div className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 h-32 overflow-y-auto space-y-1 custom-scrollbar">
+                                  {teachers.map(t => {
+                                    const count = getTeacherExamCount(t.uid);
+                                    const isSelected = ra.invigilators.includes(t.uid);
+                                    return (
+                                      <label key={t.uid} className={cn(
+                                        "flex items-center gap-3 p-1.5 rounded-lg cursor-pointer transition-all border border-transparent",
+                                        isSelected ? "bg-blue-50 border-blue-100" : "hover:bg-white hover:border-slate-200"
+                                      )}>
+                                        <input 
+                                          type="checkbox"
+                                          checked={isSelected}
+                                          onChange={() => {
+                                            const newRa = [...roomAssignments];
+                                            const currentInvigs = newRa[idx].invigilators || [];
+                                            newRa[idx].invigilators = currentInvigs.includes(t.uid)
+                                              ? currentInvigs.filter(id => id !== t.uid)
+                                              : [...currentInvigs, t.uid];
+                                            setRoomAssignments(newRa);
+                                          }}
+                                          className="w-3.5 h-3.5 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+                                        />
+                                        <div className="flex flex-col">
+                                          <span className={cn("text-xs font-bold", count >= 4 ? "text-red-600" : "text-slate-700")}>
+                                            {t.displayName}
+                                          </span>
+                                          <span className="text-[9px] text-slate-400">
+                                            الحراسات: {count}
+                                          </span>
+                                        </div>
+                                      </label>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 <div className="p-6 border-t border-slate-100 bg-slate-50 flex gap-3">
-                  <button type="submit" className="flex-1 bg-blue-600 text-white py-3 rounded-xl font-bold hover:bg-blue-700 transition-all">
+                  <button type="submit" className="flex-1 bg-blue-600 text-white py-3.5 rounded-2xl font-black hover:bg-blue-700 transition-all shadow-lg shadow-blue-100">
                     {editingExam ? 'تحديث الامتحان' : 'إضافة الامتحان'}
                   </button>
                   {editingExam && (
                     <button 
                       type="button"
                       onClick={() => setSessionToDelete({ id: editingExam.id, type: 'exam' })}
-                      className="px-6 bg-red-50 text-red-600 rounded-xl font-bold hover:bg-red-100 transition-all flex items-center gap-2"
+                      className="px-6 bg-red-50 text-red-600 rounded-2xl font-black hover:bg-red-100 transition-all flex items-center gap-2"
                     >
                       <Trash2 className="w-5 h-5" />
                       <span>حذف</span>
@@ -2755,7 +2958,7 @@ export default function Schedules() {
                       setShowAddModal(false);
                       setEditingExam(null);
                     }} 
-                    className="flex-1 bg-white border border-slate-200 text-slate-600 py-3 rounded-xl font-bold hover:bg-slate-50 transition-all"
+                    className="flex-1 bg-white border border-slate-200 text-slate-600 py-3.5 rounded-2xl font-black hover:bg-slate-50 transition-all"
                   >
                     إلغاء
                   </button>
@@ -2844,6 +3047,49 @@ export default function Schedules() {
             )}
             <button 
               onClick={() => setPromptConfig(prev => ({ ...prev, show: false }))}
+              className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl font-bold hover:bg-slate-200 transition-all"
+            >
+              إلغاء
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* General Confirmation Modal */}
+    {confirmState.show && (
+      <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[150] flex items-center justify-center p-4">
+        <div className="bg-white rounded-3xl w-full max-w-sm shadow-2xl p-8 space-y-6 text-center">
+          <div className={cn(
+            "w-20 h-20 rounded-full flex items-center justify-center mx-auto",
+            confirmState.type === 'danger' ? "bg-red-50" : confirmState.type === 'warning' ? "bg-amber-50" : "bg-blue-50"
+          )}>
+            {confirmState.type === 'danger' ? (
+              <Trash2 className="w-10 h-10 text-red-600" />
+            ) : confirmState.type === 'warning' ? (
+              <AlertTriangle className="w-10 h-10 text-amber-600" />
+            ) : (
+              <ShieldCheck className="w-10 h-10 text-blue-600" />
+            )}
+          </div>
+          <div>
+            <h3 className="text-xl font-bold text-slate-900">{confirmState.title}</h3>
+            <p className="text-slate-500 mt-2">
+              {confirmState.message}
+            </p>
+          </div>
+          <div className="flex gap-3">
+            <button 
+              onClick={() => confirmState.onConfirm()}
+              className={cn(
+                "flex-1 text-white py-3 rounded-xl font-bold transition-all",
+                confirmState.type === 'danger' ? "bg-red-600 hover:bg-red-700" : confirmState.type === 'warning' ? "bg-amber-600 hover:bg-amber-700" : "bg-blue-600 hover:bg-blue-700"
+              )}
+            >
+              تأكيد
+            </button>
+            <button 
+              onClick={() => setConfirmState(prev => ({ ...prev, show: false }))}
               className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl font-bold hover:bg-slate-200 transition-all"
             >
               إلغاء
