@@ -57,3 +57,14 @@ export function getDatesForDay(dayName: string, startDate: string, endDate: stri
   
   return dates;
 }
+
+export function mapLevelName(name: string) {
+  const map: Record<string, string> = {
+    'L1': "First Year Bachelor's",
+    'L2': "Second Year Bachelor's",
+    'L3': "Third Year Bachelor's",
+    'M1': "First Year Master's",
+    'M2': "Second Year Master's"
+  };
+  return map[name] || name;
+}

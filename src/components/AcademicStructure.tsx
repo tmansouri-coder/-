@@ -3,10 +3,11 @@ import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, query, where, o
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { Cycle, Level, Module, Specialty } from '../types';
 import { BookOpen, ChevronRight, Layers, GraduationCap, Plus, Trash2, Edit2, Save, X } from 'lucide-react';
-import { cn } from '../lib/utils';
+import { cn, mapLevelName } from '../lib/utils';
 import { useAuth } from '../contexts/AuthContext';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
 import { motion, AnimatePresence } from 'motion/react';
+import toast from 'react-hot-toast';
 
 export default function AcademicStructure() {
   const { isAdmin } = useAuth();
@@ -35,10 +36,40 @@ export default function AcademicStructure() {
           getDocs(query(collection(db, 'modules'), where('academicYear', '==', selectedYear))),
         ]);
 
-      setCycles(cycleSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Cycle)));
-      setLevels(levelSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Level)));
-      setSpecialties(specSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Specialty)));
       setModules(moduleSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Module)));
+
+      // Check and migrate level names if needed
+      const levelDocs = levelSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Level));
+      const migrationMap: Record<string, string> = {
+        'L1': "First Year Bachelor's",
+        'L2': "Second Year Bachelor's",
+        'L3': "Third Year Bachelor's",
+        'M1': "First Year Master's",
+        'M2': "Second Year Master's"
+      };
+
+      if (isAdmin) {
+        let hasChanges = false;
+        for (const level of levelDocs) {
+          if (migrationMap[level.name]) {
+            const newName = migrationMap[level.name];
+            try {
+              await updateDoc(doc(db, 'levels', level.id), { name: newName });
+              level.name = newName;
+              hasChanges = true;
+            } catch (err) {
+              console.error(`Failed to migrate level ${level.id}:`, err);
+            }
+          }
+        }
+        if (hasChanges) {
+          toast.success('تم تحديث أسماء المستويات بنجاح');
+        }
+      }
+
+      setCycles(cycleSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Cycle)));
+      setLevels(levelDocs.map(l => ({ ...l, name: mapLevelName(l.name) })));
+      setSpecialties(specSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Specialty)));
       setLoading(false);
     } catch (err) {
       handleFirestoreError(err, OperationType.GET, 'academic_structure');

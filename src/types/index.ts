@@ -328,7 +328,7 @@ export interface DepartmentStats {
   temporaryFirstYearCours: number;
   
   // Failure Rates
-  failureRatePerYear: Record<string, number>; // e.g., {"L1": 20, "L2": 15...}
+  failureRatePerYear: Record<string, number>; // e.g., {"First Year Bachelor's": 20, "Second Year Bachelor's": 15...}
   
   // Infrastructure
   amphisUsed: number;

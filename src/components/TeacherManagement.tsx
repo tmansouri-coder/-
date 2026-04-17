@@ -195,7 +195,7 @@ export default function TeacherManagement() {
       const level = levels.find(l => l.id === s.levelId);
       const cycle = cycles.find(c => c?.id === level?.cycleId);
       
-      const isL3 = level?.name.includes('3') && (cycle?.name === 'Licence' || cycle?.name === 'ليسانس');
+      const isL3 = level?.name.includes('Third') && (cycle?.name === 'Licence' || cycle?.name === 'ليسانس');
       const isMaster = cycle?.name === 'Master' || cycle?.name === 'ماستر';
       
       if (isL3 || isMaster) {
@@ -512,9 +512,9 @@ export default function TeacherManagement() {
                                 defaultChecked={editingTeacher.specialtyIds?.includes(group.l3.id)}
                                 className="w-3 h-3 text-blue-600 rounded-full" 
                               />
-                              <span className="text-[10px] font-medium text-slate-600">
-                                {t('cycle_licence')} (L3) - {name}
-                              </span>
+                                <span className="text-[10px] font-medium text-slate-600">
+                                  {t('cycle_licence')} (Third Year) - {name}
+                                </span>
                             </label>
                           )}
                           {group.master && group.master.length > 0 && (
@@ -526,9 +526,9 @@ export default function TeacherManagement() {
                                 defaultChecked={group.master.some(s => editingTeacher.specialtyIds?.includes(s.id))}
                                 className="w-3 h-3 text-blue-600 rounded-full" 
                               />
-                              <span className="text-[10px] font-medium text-slate-600">
-                                {t('cycle_master')} (M1+M2) - {name}
-                              </span>
+                                <span className="text-[10px] font-medium text-slate-600">
+                                  {t('cycle_master')} (Master 1 & 2) - {name}
+                                </span>
                             </label>
                           )}
                         </div>

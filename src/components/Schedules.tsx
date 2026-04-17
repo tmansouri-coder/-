@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, query, where } from 'firebase/firestore';
+import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, query, where, setDoc, getDoc } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
@@ -13,7 +13,7 @@ import {
   ChevronRight, ChevronLeft, Search, ClipboardList,
   AlertTriangle, Mail, Copy, X, ShieldAlert, ShieldCheck
 } from 'lucide-react';
-import { cn } from '../lib/utils';
+import { cn, mapLevelName } from '../lib/utils';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import 'jspdf-autotable';
@@ -120,7 +120,7 @@ export default function Schedules() {
   const [examRooms, setExamRooms] = useState<string[]>([]);
   const [examInvigilators, setExamInvigilators] = useState<string[]>([]);
   const [applyTimeToLevel, setApplyTimeToLevel] = useState(false);
-  const [extraExamDates, setExtraExamDates] = useState<string[]>([]);
+  const [levelExtraExamDates, setLevelExtraExamDates] = useState<Record<string, string[]>>({});
   const [promptConfig, setPromptConfig] = useState<{
     show: boolean;
     title: string;
@@ -175,7 +175,7 @@ export default function Schedules() {
         const [
           cyclesSnap, levelsSnap, specialtiesSnap, 
           modulesSnap, roomsSnap, teachersSnap,
-          scheduleSnap, examSnap
+          scheduleSnap, examSnap, settingsSnap
         ] = await Promise.all([
           getDocs(collection(db, 'cycles')),
           getDocs(collection(db, 'levels')),
@@ -185,10 +185,15 @@ export default function Schedules() {
           getDocs(query(collection(db, 'users'), where('role', 'in', ['admin', 'vice_admin', 'teacher', 'specialty_manager']))),
           getDocs(query(collection(db, 'scheduleSessions'), where('academicYear', '==', selectedYear))),
           getDocs(query(collection(db, 'examSessions'), where('academicYear', '==', selectedYear))),
+          getDoc(doc(db, 'settings', 'examDates')),
         ]);
 
+        if (settingsSnap.exists()) {
+          setLevelExtraExamDates(settingsSnap.data().levelExtraExamDates || {});
+        }
+
         setCycles(cyclesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Cycle)));
-        setLevels(levelsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Level)));
+        setLevels(levelsSnap.docs.map(d => ({ id: d.id, ...d.data(), name: mapLevelName((d.data() as any).name) } as Level)));
         setSpecialties(specialtiesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Specialty)));
         
         // Fetch all modules (shared across years)
@@ -338,7 +343,7 @@ export default function Schedules() {
     if (!session) return 1;
 
     const module = modules.find(m => m.id === session.moduleId);
-    const isL2 = levels.find(l => l.id === selectedLevel)?.name.includes('L2');
+    const isL2 = levels.find(l => l.id === selectedLevel)?.name.includes('Second Year');
     const isST = module?.isST;
 
     // If this is not the first cell of a sequence, it will be skipped
@@ -725,9 +730,11 @@ export default function Schedules() {
 
   const exportExamPDF = () => {
     const specs = specialties.filter(s => s.levelId === selectedLevel);
+    const specIds = specs.map(s => s.id);
     const filteredExams = examSessions.filter(s => 
       s.semester === selectedSemester && 
-      (selectedExamType === 'All' || s.type === selectedExamType)
+      (selectedExamType === 'All' || s.type === selectedExamType) &&
+      specIds.includes(s.specialtyId)
     );
     
     let dates: string[] = [];
@@ -739,7 +746,8 @@ export default function Schedules() {
         current.setDate(current.getDate() + 1);
       }
     } else {
-      dates = Array.from(new Set(filteredExams.map(s => s.date))).sort();
+      const extraForLevel = levelExtraExamDates[selectedLevel] || [];
+      dates = Array.from(new Set([...filteredExams.map(s => s.date), ...extraForLevel])).sort();
     }
 
     // Determine format based on number of specialties
@@ -1550,7 +1558,7 @@ export default function Schedules() {
                           const hasConflict = session ? hasSemesterConflict(session) : false;
 
                           // Check if this is an ST module and we are in L2
-                          const isL2 = levels.find(l => l.id === selectedLevel)?.name.includes('L2');
+                          const isL2 = levels.find(l => l.id === selectedLevel)?.name.includes('Second Year');
                           const isST = module?.isST;
 
                           return (
@@ -1653,10 +1661,21 @@ export default function Schedules() {
                     {(isAdmin || isViceAdmin) && (
                       <button 
                         onClick={() => {
-                          const newDate = prompt('أدخل التاريخ (YYYY-MM-DD):');
-                          if (newDate && !isNaN(Date.parse(newDate))) {
-                            setExtraExamDates(prev => [...new Set([...prev, newDate])].sort());
-                          }
+                          setPromptValue('');
+                          setPromptConfig({
+                            show: true,
+                            title: 'إضافة يوم جديد:',
+                            defaultValue: '',
+                            type: 'date',
+                            onConfirm: (newDate) => {
+                              if (newDate && !isNaN(Date.parse(newDate))) {
+                                setLevelExtraExamDates(prev => ({
+                                  ...prev,
+                                  [selectedLevel]: [...new Set([...(prev[selectedLevel] || []), newDate])].sort()
+                                }));
+                              }
+                            }
+                          });
                         }}
                         className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 bg-white/80 transition-opacity z-10"
                       >
@@ -1705,59 +1724,126 @@ export default function Schedules() {
               </thead>
               <tbody>
                 {(() => {
-                  const existingDates = Array.from(new Set(examSessions.filter(s => s.semester === selectedSemester && (selectedExamType === 'All' || s.type === selectedExamType)).map(s => s.date)));
-                  const dates = Array.from(new Set([...existingDates, ...extraExamDates])).sort();
+                  const specsInLevel = specialties.filter(s => s.levelId === selectedLevel).map(s => s.id);
+                  const existingDates = Array.from(new Set(examSessions.filter(s => 
+                    s.semester === selectedSemester && 
+                    (selectedExamType === 'All' || s.type === selectedExamType) &&
+                    specsInLevel.includes(s.specialtyId)
+                  ).map(s => s.date)));
+                  
+                  const extraForLevel = levelExtraExamDates[selectedLevel] || [];
+                  const dates = Array.from(new Set([...existingDates, ...extraForLevel])).sort();
 
                   return dates.map(date => {
                   const dateObj = new Date(date);
                   const dayName = dateObj.toLocaleDateString('ar-DZ', { weekday: 'long' });
                   const formattedDate = date.split('-').reverse().join('/');
+                  const isExtra = extraForLevel.includes(date);
+                  const hasExamsOnThisDate = existingDates.includes(date);
                   
                   return (
                     <tr key={date} className="border-b-2 border-black last:border-0">
                       <td className="p-4 bg-white border-l-2 border-black text-center align-middle relative group">
                         <div className="font-bold text-black text-sm whitespace-nowrap flex items-center justify-center gap-2">
                           {dayName} &nbsp; {formattedDate}
-                          {extraExamDates.includes(date) && (
-                            <button 
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (window.confirm('هل تريد حذف هذا اليوم؟')) {
-                                  setExtraExamDates(prev => prev.filter(d => d !== date));
-                                }
-                              }}
-                              className="p-1 hover:bg-red-50 text-red-400 hover:text-red-600 rounded-lg transition-all"
-                            >
-                              <Trash2 className="w-3 h-3" />
-                            </button>
+                          {(isAdmin || isViceAdmin) && (
+                            <div className="flex gap-1">
+                              <button 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const specsInThisLevel = specialties.filter(s => s.levelId === selectedLevel).map(s => s.id);
+                                  const affectedExams = examSessions.filter(s => s.date === date && specsInThisLevel.includes(s.specialtyId));
+                                  
+                                  setConfirmState({
+                                    show: true,
+                                    title: 'حذف يوم الامتحان',
+                                    message: affectedExams.length > 0 
+                                      ? `هذا اليوم يحتوي على ${affectedExams.length} امتحانات لهذا المستوى. هل أنت متأكد من حذف اليوم وجميع امتحاناته؟`
+                                      : 'هل أنت متأكد من حذف هذا اليوم؟',
+                                    type: 'danger',
+                                    onConfirm: async () => {
+                                      setConfirmState(prev => ({ ...prev, show: false }));
+                                      if (affectedExams.length > 0) {
+                                        const toastId = toast.loading('جاري حذف الامتحانات...');
+                                        try {
+                                          const deletePromises = affectedExams.map(exam => deleteDoc(doc(db, 'examSessions', exam.id)));
+                                          await Promise.all(deletePromises);
+                                          setExamSessions(prev => prev.filter(e => !affectedExams.some(ae => ae.id === e.id)));
+                                          toast.success('تم حذف اليوم والامتحانات بنجاح', { id: toastId });
+                                        } catch (err) {
+                                          console.error('Delete exams failed:', err);
+                                          toast.error('فشل حذف الامتحانات', { id: toastId });
+                                        }
+                                      }
+                                      
+                                      const newLevelDates = {
+                                        ...levelExtraExamDates,
+                                        [selectedLevel]: (levelExtraExamDates[selectedLevel] || []).filter(d => d !== date)
+                                      };
+                                      setLevelExtraExamDates(newLevelDates);
+                                      await setDoc(doc(db, 'settings', 'examDates'), { levelExtraExamDates: newLevelDates }, { merge: true });
+                                    }
+                                  });
+                                }}
+                                className="p-1 hover:bg-red-50 text-red-400 hover:text-red-600 rounded-lg transition-all"
+                                title="حذف اليوم"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                              <button 
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setPromptValue(date);
+                                  setPromptConfig({
+                                    show: true,
+                                    title: 'تعديل التاريخ:',
+                                    defaultValue: date,
+                                    type: 'date',
+                                    onConfirm: async (newDate) => {
+                                      if (newDate && !isNaN(Date.parse(newDate)) && newDate !== date) {
+                                        const specsInThisLevel = specialties.filter(s => s.levelId === selectedLevel).map(s => s.id);
+                                        const examsToUpdate = examSessions.filter(s => s.date === date && specsInThisLevel.includes(s.specialtyId));
+                                        
+                                        const toastId = toast.loading('جاري تحديث التاريخ...');
+                                        try {
+                                          if (examsToUpdate.length > 0) {
+                                            const updatePromises = examsToUpdate.map(exam => 
+                                              updateDoc(doc(db, 'examSessions', exam.id), { date: newDate })
+                                            );
+                                            await Promise.all(updatePromises);
+                                            
+                                            // Update local examSessions state
+                                            setExamSessions(prev => prev.map(e => 
+                                              examsToUpdate.some(ae => ae.id === e.id) 
+                                                ? { ...e, date: newDate } 
+                                                : e
+                                            ));
+                                          }
+
+                                          const newLevelDates = {
+                                            ...levelExtraExamDates,
+                                            [selectedLevel]: (levelExtraExamDates[selectedLevel] || []).map(d => d === date ? newDate : d)
+                                          };
+                                          setLevelExtraExamDates(newLevelDates);
+                                          await setDoc(doc(db, 'settings', 'examDates'), { levelExtraExamDates: newLevelDates }, { merge: true });
+                                          
+                                          toast.success('تم تحديث التاريخ بنجاح', { id: toastId });
+                                        } catch (err) {
+                                          console.error('Update date failed:', err);
+                                          toast.error('فشل تحديث التاريخ', { id: toastId });
+                                        }
+                                      }
+                                    }
+                                  });
+                                }}
+                                className="p-1 hover:bg-blue-50 text-blue-400 hover:text-blue-600 rounded-lg transition-all"
+                                title="تعديل التاريخ"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
                           )}
                         </div>
-                        {(isAdmin || isViceAdmin) && (
-                          <button 
-                            onClick={() => {
-                              setPromptValue(date);
-                              setPromptConfig({
-                                show: true,
-                                title: 'تعديل التاريخ:',
-                                defaultValue: date,
-                                type: 'date',
-                                onConfirm: (newDate) => {
-                                  if (newDate && !isNaN(Date.parse(newDate)) && newDate !== date) {
-                                    // Update all exams on this date
-                                    const examsToUpdate = examSessions.filter(s => s.date === date);
-                                    examsToUpdate.forEach(async (exam) => {
-                                      await updateDoc(doc(db, 'examSessions', exam.id), { date: newDate });
-                                    });
-                                    setExtraExamDates(prev => prev.map(d => d === date ? newDate : d));
-                                  }
-                                }
-                              });
-                            }}
-                            className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 bg-white/80 transition-opacity"
-                          >
-                            <Edit2 className="w-4 h-4 text-blue-600" />
-                          </button>
-                        )}
                       </td>
                       {specialties.filter(s => s.levelId === selectedLevel).map((spec) => {
                         const sessions = examSessions.filter(s => s.date === date && s.specialtyId === spec.id && s.semester === selectedSemester && (selectedExamType === 'All' || s.type === selectedExamType));
@@ -1940,9 +2026,14 @@ export default function Schedules() {
                           title: 'اختر تاريخ اليوم الجديد:',
                           defaultValue: '',
                           type: 'date',
-                          onConfirm: (newDate) => {
+                          onConfirm: async (newDate) => {
                             if (newDate && !isNaN(Date.parse(newDate))) {
-                              setExtraExamDates(prev => [...new Set([...prev, newDate])].sort());
+                              const newLevelDates = {
+                                ...levelExtraExamDates,
+                                [selectedLevel]: [...new Set([...(levelExtraExamDates[selectedLevel] || []), newDate])].sort()
+                              };
+                              setLevelExtraExamDates(newLevelDates);
+                              await setDoc(doc(db, 'settings', 'examDates'), { levelExtraExamDates: newLevelDates }, { merge: true });
                             }
                           }
                         });

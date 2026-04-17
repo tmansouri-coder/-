@@ -8,7 +8,7 @@ import {
   FileText, MessageSquare, History, Settings, MoreVertical, X, Users, MapPin,
   TrendingUp, AlertTriangle, ShieldCheck, Mail, Download, ExternalLink
 } from 'lucide-react';
-import { cn } from '../lib/utils';
+import { cn, mapLevelName } from '../lib/utils';
 import { useAuth } from '../contexts/AuthContext';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
 import toast from 'react-hot-toast';
@@ -58,7 +58,7 @@ export default function ProjectManagement() {
         setSpecialties(specialtiesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Specialty)));
         setRooms(roomsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Room)));
         setCycles(cyclesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Cycle)));
-        setLevels(levelsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Level)));
+        setLevels(levelsSnap.docs.map(d => ({ id: d.id, ...d.data(), name: mapLevelName((d.data() as any).name) } as Level)));
       } catch (err) {
         handleFirestoreError(err, OperationType.GET, 'projects/users/specialties');
       } finally {

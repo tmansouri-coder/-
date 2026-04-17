@@ -3,7 +3,7 @@ import { collection, getDocs, addDoc, query, orderBy, limit, where } from 'fireb
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { Cycle, Level, Specialty, Module, User, ScheduleSession, SessionLog, Student, DepartmentStats as StatsType } from '../types';
 import { BarChart3, Users, BookOpen, GraduationCap, Clock, CheckCircle2, XCircle, AlertTriangle, Save, Plus, Info, Database } from 'lucide-react';
-import { cn } from '../lib/utils';
+import { cn, mapLevelName } from '../lib/utils';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { useAuth } from '../contexts/AuthContext';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
@@ -69,7 +69,7 @@ export default function DepartmentStats() {
         const students = studentsSnap.docs.map(d => d.data() as Student).filter(s => s.academicYear === selectedYear);
         const sessions = sessionsSnap.docs.map(d => d.data() as ScheduleSession).filter(s => s.academicYear === selectedYear);
         const specialties = specialtiesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Specialty));
-        const levels = levelsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Level));
+        const levels = levelsSnap.docs.map(d => ({ id: d.id, ...d.data(), name: mapLevelName((d.data() as any).name) } as Level));
         const cycles = cyclesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Cycle));
 
         // Helper to get cycle by specialtyId
@@ -121,10 +121,10 @@ export default function DepartmentStats() {
 
           if (isTemp) {
             if (s.type === 'Cours') tC++; else if (s.type === 'TD') tTD++; else tTP++;
-            // Check if First Year (L1)
+            // Check if First Year
             const spec = specialties.find(sp => sp.id === s.specialtyId);
             const level = levels.find(l => l.id === spec?.levelId);
-            if (level?.name.includes('1') && (cycle?.name.includes('ليسانس') || cycle?.name === 'Licence')) {
+            if (level?.name.includes('First Year') && (cycle?.name.includes('ليسانس') || cycle?.name === 'Licence')) {
               if (s.type === 'Cours') tFYC++;
             }
           }
@@ -175,7 +175,7 @@ export default function DepartmentStats() {
           const latest = historySnap.docs[0].data() as StatsType;
           setCurrentStats({
             ...latest,
-            failureRatePerYear: latest.failureRatePerYear || { "L1": 0, "L2": 0, "L3": 0, "M1": 0, "M2": 0 }
+            failureRatePerYear: latest.failureRatePerYear || { "First Year Bachelor's": 0, "Second Year Bachelor's": 0, "Third Year Bachelor's": 0, "First Year Master's": 0, "Second Year Master's": 0 }
           });
         } else {
           setCurrentStats({
@@ -183,7 +183,7 @@ export default function DepartmentStats() {
             licenceGroups: 0,
             engineerGroups: 0,
             masterGroups: 0,
-            failureRatePerYear: { "L1": 0, "L2": 0, "L3": 0, "M1": 0, "M2": 0 },
+            failureRatePerYear: { "First Year Bachelor's": 0, "Second Year Bachelor's": 0, "Third Year Bachelor's": 0, "First Year Master's": 0, "Second Year Master's": 0 },
             amphisUsed: 0,
             tdRoomsUsed: 0,
             tpRoomsUsed: 0,

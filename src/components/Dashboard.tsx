@@ -21,6 +21,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { seedInitialData } from '../lib/seed';
 import { PedagogicalCalendar, CalendarEvent, CalendarEventType, Module, Project, User, Cycle, Level, Specialty } from '../types';
 import { useTranslation } from 'react-i18next';
+import { mapLevelName } from '../lib/utils';
 
 const EVENT_TYPE_COLORS: Record<CalendarEventType, string> = {
   holiday: 'bg-orange-50 text-orange-700 border-orange-100',
@@ -101,7 +102,7 @@ export default function Dashboard() {
         const modules = modulesSnap.docs.map(d => d.data() as Module);
         const projects = projectsSnap.docs.map(d => d.data() as Project);
         const cycles = cyclesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Cycle));
-        const levels = levelsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Level));
+        const levels = levelsSnap.docs.map(d => ({ id: d.id, ...d.data(), name: mapLevelName((d.data() as any).name) } as Level));
         const specialties = specialtiesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Specialty));
 
         const avgProgress = modules.length > 0 
