@@ -957,34 +957,36 @@ export default function Schedules() {
               const splitModule = doc.splitTextToSize(s.module, width - padding * 2);
               doc.text(splitModule, x + width / 2, currentY + 8, { align: 'center' });
 
-              // Position assignments at the bottom: Left, Center, Right
-              const assignmentY = y + height - padding - 1;
-              s.assignments?.forEach((ra: any, rIdx: number) => {
-                if (rIdx > 2) return; // Support up to 3 positions as requested
+              // Position assignments at the bottom: distributed horizontally from bottom-left to right
+              const assignmentY = currentY + cellHeight - padding - 1;
+              if (s.assignments && s.assignments.length > 0) {
+                const count = s.assignments.length;
+                const step = count > 1 ? (width - padding * 2) / (count - 1) : 0;
                 
-                doc.setFont('helvetica', 'bold');
-                doc.setFontSize(baseFontSize - 2);
-                doc.setTextColor(0, 0, 0);
-                
-                const info = `${ra.room} (${ra.groups || 'All'}) : ${ra.invigs}`;
-                
-                let align: 'left' | 'center' | 'right' = 'left';
-                let posX = x + padding;
-                
-                if (rIdx === 0) {
-                  align = 'left';
-                  posX = x + padding;
-                } else if (rIdx === 1) {
-                  align = 'center';
-                  posX = x + width / 2;
-                } else if (rIdx === 2) {
-                  align = 'right';
-                  posX = x + width - padding;
-                }
-                
-                // Ensure info stays on one line as requested
-                doc.text(info, posX, assignmentY, { align, baseline: 'bottom' });
-              });
+                s.assignments.forEach((ra: any, rIdx: number) => {
+                  doc.setFont('helvetica', 'bold');
+                  doc.setFontSize(baseFontSize - 2);
+                  doc.setTextColor(0, 0, 0);
+                  
+                  const info = `${ra.room} (${ra.groups || 'All'}) : ${ra.invigs}`;
+                  
+                  let align: 'left' | 'center' | 'right' = 'center';
+                  let posX: number;
+                  
+                  if (count === 1) {
+                    align = 'center';
+                    posX = x + width / 2;
+                  } else {
+                    posX = x + padding + rIdx * step;
+                    if (rIdx === 0) align = 'left';
+                    else if (rIdx === count - 1) align = 'right';
+                    else align = 'center';
+                  }
+                  
+                  // Ensure info stays on one line as requested
+                  doc.text(info, posX, assignmentY, { align, baseline: 'bottom' });
+                });
+              }
             }
 
             if (idx < sessions.length - 1) {
