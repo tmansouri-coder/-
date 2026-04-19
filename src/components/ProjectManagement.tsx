@@ -53,12 +53,25 @@ export default function ProjectManagement() {
           getDocs(collection(db, 'levels'))
         ]);
 
+        const levelDocs = levelsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Level));
+        const specDocs = specialtiesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Specialty));
+
+        // Resilience: Fix specialty/level mapping inconsistencies
+        const correctedSpecialties = specDocs.map(spec => {
+          if (!levelDocs.some(l => l.id === spec.levelId)) {
+            // Attempt recovery if levelId is a name (e.g. "L1", "L3") instead of a UUID
+            const foundLevel = levelDocs.find(l => l.name === spec.levelId || l.id === spec.levelId);
+            if (foundLevel) return { ...spec, levelId: foundLevel.id };
+          }
+          return spec;
+        });
+
         setProjects(projectsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Project)));
         setTeachers(usersSnap.docs.map(d => ({ uid: d.id, ...d.data() } as User)).filter(u => u.role === 'teacher' || u.role === 'admin'));
-        setSpecialties(specialtiesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Specialty)));
+        setSpecialties(correctedSpecialties);
         setRooms(roomsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Room)));
         setCycles(cyclesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Cycle)));
-        setLevels(levelsSnap.docs.map(d => ({ id: d.id, ...d.data(), name: mapLevelName((d.data() as any).name) } as Level)));
+        setLevels(levelDocs.map(l => ({ ...l, name: mapLevelName(l.name) })));
       } catch (err) {
         handleFirestoreError(err, OperationType.GET, 'projects/users/specialties');
       } finally {
@@ -731,22 +744,39 @@ export default function ProjectManagement() {
                   <label className="text-sm font-bold text-slate-700">التخصص (Specialty)</label>
                   <select name="specialtyId" required className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500">
                     <option value="">اختر التخصص...</option>
-                    {specialties
-                      .filter(s => {
+                    {(() => {
+                      const cycleSpecs = specialties.filter(s => {
                         if (!selectedCycleId) return false;
                         const level = levels.find(l => l.id === s.levelId);
-                        if (!level || level.cycleId !== selectedCycleId) return false;
+                        return level && level.cycleId === selectedCycleId;
+                      });
+
+                      // Try filtering for graduating years for better UX
+                      const graduatingSpecs = cycleSpecs.filter(s => {
+                        const level = levels.find(l => l.id === s.levelId);
                         const cycle = cycles.find(c => c.id === selectedCycleId);
-                        if (!cycle) return false;
+                        if (!level || !cycle) return false;
+
                         const cName = cycle.name.toLowerCase();
                         const lName = level.name.toLowerCase();
-                        if (cName.includes('licence') || cName.includes('ليسانس')) return lName.includes('3') || lName.includes('l3') || lName.includes('ثالثة');
-                        if (cName.includes('master') || cName.includes('ماستر')) return lName.includes('2') || lName.includes('m2') || lName.includes('ثانية');
-                        if (cName.includes('engineer') || cName.includes('مهندس')) return lName.includes('5') || lName.includes('ing5') || lName.includes('خامسة');
+
+                        if (cName.includes('licence') || cName.includes('ليسانس')) 
+                          return lName.includes('3') || lName.includes('l3') || lName.includes('ثالثة');
+                        if (cName.includes('master') || cName.includes('ماستر')) 
+                          return lName.includes('2') || lName.includes('m2') || lName.includes('ثانية');
+                        if (cName.includes('engineer') || cName.includes('مهندس')) 
+                          return lName.includes('5') || lName.includes('ing5') || lName.includes('خامسة');
+                        
                         return true;
-                      })
-                      .map(s => <option key={s.id} value={s.id}>{s.name}</option>)
-                    }
+                      });
+
+                      // If graduating filter results in nothing, show all specialties of that cycle
+                      const finalSpecs = graduatingSpecs.length > 0 ? graduatingSpecs : cycleSpecs;
+
+                      return finalSpecs.map(s => (
+                        <option key={s.id} value={s.id}>{s.name} ({levels.find(l => l.id === s.levelId)?.name})</option>
+                      ));
+                    })()}
                   </select>
                 </div>
               </div>
