@@ -11,7 +11,8 @@ import {
   Calendar, Clock, MapPin, User as UserIcon, 
   Plus, Trash2, Edit2, Download, Filter,
   ChevronRight, ChevronLeft, Search, ClipboardList,
-  AlertTriangle, Mail, Copy, X, ShieldAlert, ShieldCheck
+  AlertTriangle, Mail, Copy, X, ShieldAlert, ShieldCheck,
+  RefreshCw
 } from 'lucide-react';
 import { cn, mapLevelName } from '../lib/utils';
 import jsPDF from 'jspdf';
@@ -173,10 +174,15 @@ export default function Schedules() {
     const fetchData = async () => {
       setLoading(true);
       try {
+        // Fetch all relevant academic years (support both - and / formats)
+        const alternateYear = selectedYear.includes('/') ? selectedYear.replace('/', '-') : selectedYear.replace('-', '/');
+        const yearQueries = [selectedYear];
+        if (alternateYear !== selectedYear) yearQueries.push(alternateYear);
+
         const [
           cyclesSnap, levelsSnap, specialtiesSnap, 
           modulesSnap, roomsSnap, teachersSnap,
-          scheduleSnap, examSnap, settingsSnap
+          settingsSnap
         ] = await Promise.all([
           getDocs(collection(db, 'cycles')),
           getDocs(collection(db, 'levels')),
@@ -184,18 +190,33 @@ export default function Schedules() {
           getDocs(collection(db, 'modules')),
           getDocs(collection(db, 'rooms')),
           getDocs(query(collection(db, 'users'), where('role', 'in', ['admin', 'vice_admin', 'teacher', 'specialty_manager']))),
-          getDocs(query(collection(db, 'scheduleSessions'), where('academicYear', '==', selectedYear))),
-          getDocs(query(collection(db, 'examSessions'), where('academicYear', '==', selectedYear))),
           getDoc(doc(db, 'settings', 'examDates')),
         ]);
+
+        // Fetch sessions for all year variants
+        const scheduleSnapshots = await Promise.all(yearQueries.map(y => getDocs(query(collection(db, 'scheduleSessions'), where('academicYear', '==', y)))));
+        const examSnapshots = await Promise.all(yearQueries.map(y => getDocs(query(collection(db, 'examSessions'), where('academicYear', '==', y)))));
 
         if (settingsSnap.exists()) {
           setLevelExtraExamDates(settingsSnap.data().levelExtraExamDates || {});
         }
 
+        const levelDocs = levelsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Level));
+        const specDocs = specialtiesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Specialty));
+
+        // Resilience: If any specialty has a level name/shortcode as levelId instead of ID, fix it in memory
+        const correctedSpecialties = specDocs.map(spec => {
+          if (!levelDocs.some(l => l.id === spec.levelId)) {
+            // Attempt recovery by name or common acronyms
+            const foundLevel = levelDocs.find(l => l.name === spec.levelId || (spec.levelId === 'L1' && l.name.includes("First Year")));
+            if (foundLevel) return { ...spec, levelId: foundLevel.id };
+          }
+          return spec;
+        });
+
         setCycles(cyclesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Cycle)));
-        setLevels(levelsSnap.docs.map(d => ({ id: d.id, ...d.data(), name: mapLevelName((d.data() as any).name) } as Level)));
-        setSpecialties(specialtiesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Specialty)));
+        setLevels(levelDocs.map(l => ({ ...l, name: mapLevelName(l.name) })));
+        setSpecialties(correctedSpecialties);
         
         // Fetch all modules (shared across years)
         setModules(modulesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Module)));
@@ -210,8 +231,13 @@ export default function Schedules() {
           return [teacher.email, teacher];
         })).values());
         setTeachers(uniqueTeachers);
-        setScheduleSessions(scheduleSnap.docs.map(d => ({ id: d.id, ...d.data() } as ScheduleSession)));
-        setExamSessions(examSnap.docs.map(d => ({ id: d.id, ...d.data() } as ExamSession)));
+
+        // Normalize year in memory for all sessions
+        const allScheduleSessions = scheduleSnapshots.flatMap(snap => snap.docs.map(d => ({ id: d.id, ...d.data() } as ScheduleSession)));
+        const allExamSessions = examSnapshots.flatMap(snap => snap.docs.map(d => ({ id: d.id, ...d.data() } as ExamSession)));
+        
+        setScheduleSessions(allScheduleSessions.map(s => ({ ...s, academicYear: selectedYear })));
+        setExamSessions(allExamSessions.map(e => ({ ...e, academicYear: selectedYear })));
         setLoading(false);
       } catch (err) {
         handleFirestoreError(err, OperationType.LIST, 'multiple_collections');
@@ -508,6 +534,96 @@ export default function Schedules() {
     });
   };
 
+  const handleRepairExams = async () => {
+    setConfirmState({
+      show: true,
+      title: 'إصلاح شامل للبيانات',
+      message: 'سيقوم النظام بفحص قاعدة البيانات بالكامل لإصلاح التنسيقات الخاطئة للأعوام الدراسية وتصحيح ارتباطات الامتحانات والحصص. هل تريد الاستمرار؟',
+      type: 'info',
+      onConfirm: async () => {
+        setConfirmState(prev => ({ ...prev, show: false }));
+        const toastId = toast.loading('جاري فحص وإصلاح قاعدة البيانات...');
+        try {
+          // 1. Fetch ALL exams and sessions regardless of current filtered state
+          const [examSnap, scheduleSnap] = await Promise.all([
+            getDocs(collection(db, 'examSessions')),
+            getDocs(collection(db, 'scheduleSessions'))
+          ]);
+
+          let repairCount = 0;
+          const alternateYear = selectedYear.includes('/') ? selectedYear.replace('/', '-') : selectedYear.replace('-', '/');
+
+          // Repair Exams
+          for (const d of examSnap.docs) {
+            const exam = d.data() as ExamSession;
+            let needsUpdate = false;
+            let newData: any = {};
+
+            // Fix Year format (if it matches selectedYear or its alternate)
+            if (exam.academicYear === alternateYear || !exam.academicYear) {
+              newData.academicYear = selectedYear;
+              needsUpdate = true;
+            }
+
+            // Fix Specialty/Level mismatch
+            let currentSpecId = newData.specialtyId || exam.specialtyId;
+            const levelByName = levels.find(l => l.name === currentSpecId || l.id === currentSpecId);
+            if (levelByName) {
+               const spec = specialties.find(s => s.levelId === levelByName.id);
+               if (spec) {
+                 newData.specialtyId = spec.id;
+                 currentSpecId = spec.id;
+                 needsUpdate = true;
+               }
+            }
+
+            // Fix missing SpecialtyId using ModuleId linkage
+            if (!currentSpecId && exam.moduleId) {
+              const module = modules.find(m => m.id === exam.moduleId);
+              if (module && module.specialtyId) {
+                newData.specialtyId = module.specialtyId;
+                needsUpdate = true;
+              }
+            }
+
+            if (needsUpdate) {
+              await updateDoc(d.ref, newData);
+              repairCount++;
+            }
+          }
+
+          // Repair Schedule Sessions
+          for (const d of scheduleSnap.docs) {
+            const session = d.data() as ScheduleSession;
+            let needsUpdate = false;
+            let newData: any = {};
+
+            if (session.academicYear === alternateYear || !session.academicYear) {
+              newData.academicYear = selectedYear;
+              needsUpdate = true;
+            }
+
+            if (needsUpdate) {
+              await updateDoc(d.ref, newData);
+              repairCount++;
+            }
+          }
+
+          if (repairCount > 0) {
+            // Force a full re-fetch of data to update UI
+            window.location.reload(); 
+            toast.success(`تم إصلاح ${repairCount} سجل بنجاح`, { id: toastId });
+          } else {
+            toast.success('لم يتم العثور على مشاكل في البيانات', { id: toastId });
+          }
+        } catch (err) {
+          console.error('Global repair failed:', err);
+          toast.error('فشل عملية الإصلاح الشاملة', { id: toastId });
+        }
+      }
+    });
+  };
+
   const handleCleanupInvisibleExams = async () => {
     setConfirmState({
       show: true,
@@ -571,8 +687,16 @@ export default function Schedules() {
       } else {
         await addDoc(collection(db, 'scheduleSessions'), sessionData);
       }
-      const snap = await getDocs(query(collection(db, 'scheduleSessions'), where('academicYear', '==', selectedYear)));
-      setScheduleSessions(snap.docs.map(d => ({ id: d.id, ...d.data() } as ScheduleSession)));
+      
+      // Refresh with year normalization
+      const alternateYear = selectedYear.includes('/') ? selectedYear.replace('/', '-') : selectedYear.replace('-', '/');
+      const yearQueries = [selectedYear];
+      if (alternateYear !== selectedYear) yearQueries.push(alternateYear);
+      
+      const snaps = await Promise.all(yearQueries.map(y => getDocs(query(collection(db, 'scheduleSessions'), where('academicYear', '==', y)))));
+      const allSessions = snaps.flatMap(snap => snap.docs.map(d => ({ id: d.id, ...d.data() } as ScheduleSession)));
+      setScheduleSessions(allSessions.map(s => ({ ...s, academicYear: selectedYear })));
+
       setShowAddModal(false);
       setEditingSession(null);
     } catch (err) {
@@ -787,7 +911,8 @@ export default function Schedules() {
     doc.setFontSize(14);
     const sessionType = selectedExamType === 'Resit' ? 'Remedial Session' : 
                         selectedExamType === 'Regular' ? 'Normal Session' : 'Exam Schedule';
-    doc.text(`${level?.name || ''} | ${sessionType}`, centerX, 20, { align: 'center' });
+    const currentLevel = levels.find(l => l.id === selectedLevel);
+    doc.text(`${currentLevel?.name || ''} | ${sessionType}`, centerX, 20, { align: 'center' });
     
     doc.setFontSize(11);
     doc.text(`Academic Year ${selectedYear} - ${selectedSemester === 'S1' ? 'Semester 1' : 'Semester 2'}`, centerX, 27, { align: 'center' });
@@ -1270,9 +1395,17 @@ export default function Schedules() {
       } else {
         await addDoc(collection(db, 'examSessions'), examData);
       }
-      const snap = await getDocs(query(collection(db, 'examSessions'), where('academicYear', '==', selectedYear)));
-      const updatedSessions = snap.docs.map(d => ({ id: d.id, ...d.data() } as ExamSession));
-      setExamSessions(updatedSessions);
+
+      // Refresh with year normalization
+      const alternateYear = selectedYear.includes('/') ? selectedYear.replace('/', '-') : selectedYear.replace('-', '/');
+      const yearQueries = [selectedYear];
+      if (alternateYear !== selectedYear) yearQueries.push(alternateYear);
+
+      const snaps = await Promise.all(yearQueries.map(y => getDocs(query(collection(db, 'examSessions'), where('academicYear', '==', y)))));
+      const allSessions = snaps.flatMap(snap => snap.docs.map(d => ({ id: d.id, ...d.data() } as ExamSession)));
+      const fetchedSessions = allSessions.map(e => ({ ...e, academicYear: selectedYear }));
+      
+      setExamSessions(fetchedSessions);
       setShowAddModal(false);
       setEditingExam(null);
       setExamDate('');
@@ -1284,8 +1417,9 @@ export default function Schedules() {
       setRoomAssignments([{ roomId: '', invigilators: [], groups: [], studentCount: 0 }]);
 
       if (applyTimeToLevel && examTime) {
-        await handleUpdateTimeForSpecialty(examSpecialty, examTime, 'level', updatedSessions);
+        await handleUpdateTimeForSpecialty(examSpecialty, examTime, 'level', fetchedSessions);
       }
+      toast.success(editingExam ? 'تم تحديث الامتحان بنجاح' : 'تم إضافة الامتحان بنجاح');
     } catch (err) {
       handleFirestoreError(err, editingExam ? OperationType.UPDATE : OperationType.CREATE, 'examSessions');
     }
@@ -1303,6 +1437,14 @@ export default function Schedules() {
         <div className="flex gap-2">
           {(isAdmin || isViceAdmin) && (
             <>
+              <button 
+                onClick={handleRepairExams}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-600 rounded-xl hover:bg-blue-100 transition-all shadow-sm border border-blue-100"
+                title="إصلاح الامتحانات غير المرئية أو المرتبطة ببيانات قديمة"
+              >
+                <RefreshCw className="w-4 h-4" />
+                <span>إصلاح وتحديث</span>
+              </button>
               <button 
                 onClick={handleCopySchedule}
                 disabled={copying}

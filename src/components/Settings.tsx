@@ -24,7 +24,7 @@ export default function Settings() {
     'users', 'specialties', 'levels', 'cycles', 'modules', 'rooms', 
     'students', 'overtimeRequests', 'projects', 'scheduleSessions', 
     'sessionLogs', 'certificateRequests', 'pedagogicalCalendar', 
-    'pedagogicalCalendars', 'examSessions', 'settings'
+    'pedagogicalCalendars', 'examSessions', 'settings', 'usernames'
   ];
 
   const handleExportBackup = async () => {
@@ -67,8 +67,7 @@ export default function Settings() {
     setShowImportConfirm(null);
 
     setIsImporting(true);
-    console.log('Starting import for file:', file.name);
-    const loadingToast = toast.loading('جاري استيراد البيانات...');
+    const loadingToast = toast.loading('جاري استيراد البيانات وتدقيقها...');
     const reader = new FileReader();
     reader.onload = async (event) => {
       try {
@@ -77,8 +76,9 @@ export default function Settings() {
         
         const backupData = JSON.parse(content);
         let totalDocs = 0;
+        let successCount = 0;
+        let failCount = 0;
         
-        // Ensure backupData is an object
         if (typeof backupData !== 'object' || backupData === null) {
           throw new Error('تنسيق الملف غير صحيح');
         }
@@ -92,19 +92,36 @@ export default function Settings() {
           
           for (const item of data) {
             const { id, ...rest } = item;
-            if (!id) continue;
+            if (!id || typeof id !== 'string') {
+              failCount++;
+              continue;
+            }
             
-            const docRef = doc(db, collName, id);
-            // Use set with merge: true to add/update without deleting existing fields
-            // and without clearing the collection
-            batch.set(docRef, rest, { merge: true });
-            count++;
-            totalDocs++;
+            // Auto-normalization of common fields during import
+            const normalizedData: any = { ...rest };
+            
+            // Normalizing Academic Year format (convert - to / commonly used in displays)
+            if (normalizedData.academicYear && typeof normalizedData.academicYear === 'string') {
+               if (normalizedData.academicYear.includes('-')) {
+                  normalizedData.academicYear = normalizedData.academicYear.replace('-', '/');
+               }
+            }
 
-            if (count === 400) {
-              await batch.commit();
-              batch = writeBatch(db);
-              count = 0;
+            try {
+              const docRef = doc(db, collName, id);
+              batch.set(docRef, normalizedData, { merge: true });
+              count++;
+              successCount++;
+              totalDocs++;
+
+              if (count === 400) {
+                await batch.commit();
+                batch = writeBatch(db);
+                count = 0;
+              }
+            } catch (docErr) {
+              console.error(`Error setting doc ${id} in ${collName}:`, docErr);
+              failCount++;
             }
           }
           if (count > 0) await batch.commit();
@@ -114,7 +131,7 @@ export default function Settings() {
         if (totalDocs === 0) {
           toast.error('لم يتم العثور على بيانات صالحة في الملف');
         } else {
-          toast.success(`تم استيراد النسخة الاحتياطية بنجاح! تم تحديث/إضافة ${totalDocs} وثيقة.`);
+          toast.success(`تمت عملية الاستيراد! بنجاح: ${successCount}${failCount > 0 ? `، فشل: ${failCount}` : ''}`);
         }
       } catch (err) {
         console.error('Import error:', err);
