@@ -98,6 +98,7 @@ export default function Schedules() {
   const [examTime, setExamTime] = useState('');
   const [formDay, setFormDay] = useState<string>('Sunday');
   const [formPeriod, setFormPeriod] = useState<string>('H1');
+  const [formTeacherId, setFormTeacherId] = useState<string>('');
   const [isST, setIsST] = useState(false);
   const [isExternal, setIsExternal] = useState(false);
   const [isReserved, setIsReserved] = useState(false);
@@ -1349,6 +1350,7 @@ export default function Schedules() {
                 setExamSpecialty('');
                 setExamRooms([]);
                 setExamInvigilators([]);
+                setFormTeacherId('');
                 setShowAddModal(true); 
               }}
               className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-all shadow-lg shadow-blue-100"
@@ -1614,6 +1616,7 @@ export default function Schedules() {
                                       setEditingSession(null); 
                                       setFormDay(day);
                                       setFormPeriod(period);
+                                      setFormTeacherId('');
                                       setShowAddModal(true); 
                                     }}
                                     className="h-full w-full rounded-xl border-2 border-dashed border-slate-100 flex items-center justify-center text-slate-300 hover:border-blue-200 hover:text-blue-300 transition-all"
@@ -2110,6 +2113,7 @@ export default function Schedules() {
                                   setFormDay(day);
                                   setFormPeriod(period);
                                   setIsReserved(true);
+                                  setFormTeacherId('');
                                   setShowAddModal(true);
                                 }}
                                 className="h-full w-full rounded-xl border-2 border-dashed border-slate-100 flex items-center justify-center text-slate-300 hover:border-blue-200 hover:text-blue-300 transition-all"
@@ -2297,6 +2301,7 @@ export default function Schedules() {
                                         setEditingSession(null);
                                         setFormDay(day);
                                         setFormPeriod(period);
+                                        setFormTeacherId(selectedTeacherId);
                                         setIsExternal(true);
                                         setShowAddModal(true);
                                       }}
@@ -2574,7 +2579,7 @@ export default function Schedules() {
                     <label className="text-sm font-bold text-slate-700">الأستاذ</label>
                     <select 
                       name="teacherId" 
-                      defaultValue={editingSession?.teacherId} 
+                      defaultValue={editingSession?.teacherId || formTeacherId} 
                       required={!isST && !isReserved}
                       disabled={isST || isReserved}
                       className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-slate-900 disabled:opacity-50"
