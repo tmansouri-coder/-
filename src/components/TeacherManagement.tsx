@@ -65,8 +65,8 @@ export default function TeacherManagement() {
     const rank = formData.get('rank') as Rank;
     const employmentType = formData.get('employmentType') as EmploymentType;
     const role = formData.get('role') as UserRole;
-    const displayName = formData.get('displayName') as string;
-    const email = formData.get('email') as string;
+    const displayName = (formData.get('displayName') as string).trim();
+    const email = (formData.get('email') as string).trim();
     
     const updateData: any = {
       rank,
@@ -151,8 +151,8 @@ export default function TeacherManagement() {
   const handleAddTeacher = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
-    const email = formData.get('email') as string;
-    const displayName = formData.get('displayName') as string;
+    const email = (formData.get('email') as string).trim();
+    const displayName = (formData.get('displayName') as string).trim();
     const rank = formData.get('rank') as Rank;
     const employmentType = formData.get('employmentType') as EmploymentType;
     const role = formData.get('role') as UserRole;

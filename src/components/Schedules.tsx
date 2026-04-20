@@ -173,74 +173,68 @@ export default function Schedules() {
   };
 
   useEffect(() => {
-    let unsubscribeSchedules: () => void;
-    let unsubscribeExams: () => void;
+    let unsubscribers: (() => void)[] = [];
 
-    const fetchData = async () => {
+    const setupListeners = () => {
       setLoading(true);
       try {
         const alternateYear = selectedYear.includes('/') ? selectedYear.replace('/', '-') : selectedYear.replace('-', '/');
         const yearQueries = [selectedYear];
         if (alternateYear !== selectedYear) yearQueries.push(alternateYear);
 
-        const [
-          cyclesSnap, levelsSnap, specialtiesSnap, 
-          modulesSnap, roomsSnap, teachersSnap,
-          settingsSnap
-        ] = await Promise.all([
-          getDocs(collection(db, 'cycles')),
-          getDocs(collection(db, 'levels')),
-          getDocs(collection(db, 'specialties')),
-          getDocs(collection(db, 'modules')),
-          getDocs(collection(db, 'rooms')),
-          getDocs(query(collection(db, 'users'), where('role', 'in', ['admin', 'vice_admin', 'teacher', 'specialty_manager']))),
-          getDoc(doc(db, 'settings', 'examDates')),
-        ]);
+        // Core Entities (Real-time)
+        unsubscribers.push(onSnapshot(collection(db, 'cycles'), (snap) => {
+          setCycles(snap.docs.map(d => ({ id: d.id, ...d.data() } as Cycle)));
+        }));
 
-        if (settingsSnap.exists()) {
-          setLevelExtraExamDates(settingsSnap.data().levelExtraExamDates || {});
-        }
+        unsubscribers.push(onSnapshot(collection(db, 'levels'), (snap) => {
+          const levelDocs = snap.docs.map(d => ({ id: d.id, ...d.data() } as Level));
+          setLevels(levelDocs.map(l => ({ ...l, name: mapLevelName(l.name) })));
+        }));
 
-        const levelDocs = levelsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Level));
-        const specDocs = specialtiesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Specialty));
+        unsubscribers.push(onSnapshot(collection(db, 'specialties'), (snap) => {
+          setSpecialties(snap.docs.map(d => ({ id: d.id, ...d.data() } as Specialty)));
+        }));
 
-        const correctedSpecialties = specDocs.map(spec => {
-          if (!levelDocs.some(l => l.id === spec.levelId)) {
-            const foundLevel = levelDocs.find(l => l.name === spec.levelId || (spec.levelId === 'L1' && l.name.includes("First Year")));
-            if (foundLevel) return { ...spec, levelId: foundLevel.id };
+        unsubscribers.push(onSnapshot(collection(db, 'modules'), (snap) => {
+          setModules(snap.docs.map(d => ({ id: d.id, ...d.data() } as Module)));
+        }));
+
+        unsubscribers.push(onSnapshot(collection(db, 'rooms'), (snap) => {
+          setRooms(snap.docs.map(d => ({ id: d.id, ...d.data() } as Room)));
+        }));
+
+        unsubscribers.push(onSnapshot(query(collection(db, 'users'), where('role', 'in', ['admin', 'vice_admin', 'teacher', 'specialty_manager'])), (snap) => {
+          const uniqueTeachers = Array.from(new Map(snap.docs.map(d => {
+            const data = d.data();
+            const teacher = { 
+              uid: d.id, 
+              ...data,
+              displayName: data.displayName || data.name || t('no_teacher')
+            } as User;
+            return [teacher.uid, teacher];
+          })).values());
+          setTeachers(uniqueTeachers);
+        }));
+
+        unsubscribers.push(onSnapshot(doc(db, 'settings', 'examDates'), (snap) => {
+          if (snap.exists()) {
+            setLevelExtraExamDates(snap.data().levelExtraExamDates || {});
           }
-          return spec;
-        });
-
-        setCycles(cyclesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Cycle)));
-        setLevels(levelDocs.map(l => ({ ...l, name: mapLevelName(l.name) })));
-        setSpecialties(correctedSpecialties);
-        setModules(modulesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Module)));
-        setRooms(roomsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Room)));
-        
-        const uniqueTeachers = Array.from(new Map(teachersSnap.docs.map(d => {
-          const data = d.data();
-          const teacher = { 
-            uid: d.id, 
-            ...data,
-            displayName: data.displayName || data.name || t('no_teacher')
-          } as User;
-          return [teacher.email, teacher];
-        })).values());
-        setTeachers(uniqueTeachers);
+        }));
 
         // Real-time synchronization for sessions
         const schedQuery = query(collection(db, 'scheduleSessions'), where('academicYear', 'in', yearQueries));
-        unsubscribeSchedules = onSnapshot(schedQuery, (snap) => {
+        unsubscribers.push(onSnapshot(schedQuery, (snap) => {
           const docs = snap.docs.map(d => ({ id: d.id, ...d.data(), academicYear: selectedYear } as ScheduleSession));
           setScheduleSessions(docs);
-        });
+        }));
 
         const examQuery = query(collection(db, 'examSessions'), where('academicYear', 'in', yearQueries));
-        unsubscribeExams = onSnapshot(examQuery, (snap) => {
+        unsubscribers.push(onSnapshot(examQuery, (snap) => {
           const docs = snap.docs.map(d => ({ id: d.id, ...d.data(), academicYear: selectedYear } as ExamSession));
           setExamSessions(docs);
-        });
+        }));
 
         setLoading(false);
       } catch (err) {
@@ -249,12 +243,110 @@ export default function Schedules() {
       }
     };
 
-    fetchData();
-    return () => {
-      if (unsubscribeSchedules) unsubscribeSchedules();
-      if (unsubscribeExams) unsubscribeExams();
-    };
+    setupListeners();
+    return () => unsubscribers.forEach(unsub => unsub());
   }, [selectedYear]);
+
+  // Auto-healer for legacy name-based teacher IDs
+  useEffect(() => {
+    if ((isAdmin || isViceAdmin) && !loading && teachers.length > 0) {
+      const healData = async () => {
+        let healedCount = 0;
+        const batch = writeBatch(db);
+        
+        // Fix scheduleSessions
+        scheduleSessions.forEach(s => {
+          if (s.teacherId && !teachers.some(t => t.uid === s.teacherId)) {
+            const matched = teachers.find(t => t.displayName.toLowerCase().trim() === s.teacherId.toLowerCase().trim());
+            if (matched) {
+              batch.update(doc(db, 'scheduleSessions', s.id), { teacherId: matched.uid });
+              healedCount++;
+            }
+          }
+        });
+
+        // Fix examSessions
+        examSessions.forEach(s => {
+          let updated = false;
+          const newInvigs = s.invigilators?.map(id => {
+            if (id && !teachers.some(t => t.uid === id)) {
+              const matched = teachers.find(t => t.displayName.toLowerCase().trim() === id.toLowerCase().trim());
+              if (matched) {
+                updated = true;
+                return matched.uid;
+              }
+            }
+            return id;
+          });
+
+          if (updated) {
+            batch.update(doc(db, 'examSessions', s.id), { invigilators: newInvigs });
+            healedCount++;
+          }
+          
+          // Fix roomAssignments
+          let raUpdated = false;
+          const newRA = s.roomAssignments?.map(ra => {
+            let invigsUpdated = false;
+            const newRaInvigs = ra.invigilators?.map(id => {
+              if (id && !teachers.some(t => t.uid === id)) {
+                const matched = teachers.find(t => t.displayName.toLowerCase().trim() === id.toLowerCase().trim());
+                if (matched) {
+                  invigsUpdated = true;
+                  return matched.uid;
+                }
+              }
+              return id;
+            });
+            if (invigsUpdated) {
+              raUpdated = true;
+              return { ...ra, invigilators: newRaInvigs };
+            }
+            return ra;
+          });
+
+          if (raUpdated) {
+            batch.update(doc(db, 'examSessions', s.id), { roomAssignments: newRA });
+            healedCount++;
+          }
+        });
+
+        if (healedCount > 0) {
+          try {
+            await batch.commit();
+            console.log(`Auto-healed ${healedCount} teacher bonds.`);
+          } catch (err) {
+            console.error('Auto-heal failed:', err);
+          }
+        }
+      };
+      
+      const timeoutId = setTimeout(healData, 5000); // Wait 5s for everything to stabilize
+      return () => clearTimeout(timeoutId);
+    }
+  }, [isAdmin, isViceAdmin, loading, teachers.length]);
+
+  const resolveTeacher = (id: string | undefined | null) => {
+    if (!id) return null;
+    const cleanId = id.toLowerCase().trim();
+    return teachers.find(t => 
+      t.uid === id || 
+      t.email?.toLowerCase().trim() === cleanId || 
+      t.username?.toLowerCase().trim() === cleanId || 
+      t.displayName?.toLowerCase().trim() === cleanId
+    );
+  };
+
+  const formatTeacherName = (displayName: string | undefined | null) => {
+    if (!displayName) return t('no_teacher');
+    const names = displayName.trim().split(/\s+/).filter(Boolean);
+    if (names.length === 0) return t('no_teacher');
+    if (names.length === 1) return names[0].toUpperCase();
+    
+    const initial = names[0].charAt(0).toUpperCase();
+    const lastName = names[names.length - 1].toUpperCase();
+    return `${initial}.${lastName}`;
+  };
 
   const getTeacherExamCount = (teacherId: string) => {
     return examSessions.filter(s => {
@@ -294,7 +386,7 @@ export default function Schedules() {
       const invigs2 = other.mode === 'Simple' ? other.invigilators : other.roomAssignments?.flatMap(ra => ra.invigilators) || [];
       const conflictingTeacherId = invigs1?.find(id => invigs2?.includes(id));
       if (conflictingTeacherId) {
-        const teacher = teachers.find(t => t.uid === conflictingTeacherId);
+        const teacher = resolveTeacher(conflictingTeacherId);
         return { type: 'أستاذ', name: teacher?.displayName || '' };
       }
     }
@@ -355,9 +447,19 @@ export default function Schedules() {
     [levels, selectedCycle]
   );
   
+  const correctedSpecialties = useMemo(() => {
+    return specialties.map(spec => {
+      if (!levels.some(l => l.id === spec.levelId)) {
+        const foundLevel = levels.find(l => l.name === spec.levelId || (spec.levelId === 'L1' && l.name.includes("First Year")));
+        if (foundLevel) return { ...spec, levelId: foundLevel.id };
+      }
+      return spec;
+    });
+  }, [specialties, levels]);
+
   const filteredSpecialties = useMemo(() => 
-    specialties.filter(s => s.levelId === selectedLevel),
-    [specialties, selectedLevel]
+    correctedSpecialties.filter(s => s.levelId === selectedLevel),
+    [correctedSpecialties, selectedLevel]
   );
 
   const semesterSessionsMap = useMemo(() => {
@@ -808,15 +910,6 @@ export default function Schedules() {
         await addDoc(collection(db, 'scheduleSessions'), sessionData);
       }
       
-      // Refresh with year normalization
-      const alternateYear = selectedYear.includes('/') ? selectedYear.replace('/', '-') : selectedYear.replace('-', '/');
-      const yearQueries = [selectedYear];
-      if (alternateYear !== selectedYear) yearQueries.push(alternateYear);
-      
-      const snaps = await Promise.all(yearQueries.map(y => getDocs(query(collection(db, 'scheduleSessions'), where('academicYear', '==', y)))));
-      const allSessions = snaps.flatMap(snap => snap.docs.map(d => ({ id: d.id, ...d.data() } as ScheduleSession)));
-      setScheduleSessions(allSessions.map(s => ({ ...s, academicYear: selectedYear })));
-
       setShowAddModal(false);
       setEditingSession(null);
     } catch (err) {
@@ -874,7 +967,7 @@ export default function Schedules() {
 
         if (session) {
           const module = modules.find(m => m.id === session.moduleId);
-          const teacher = teachers.find(t => t.uid === session.teacherId);
+          const teacher = resolveTeacher(session.teacherId);
           const room = rooms.find(r => r.id === session.roomId);
           
           row.push({
@@ -1066,10 +1159,8 @@ export default function Schedules() {
               const assignments = s.roomAssignments?.map(ra => {
                 const room = rooms.find(r => r.id === ra.roomId);
                 const invigs = ra.invigilators.map(id => {
-                  const t = teachers.find(teach => teach.uid === id);
-                  if (!t) return '';
-                  const names = t.displayName.split(' ');
-                  return `${names[0]?.charAt(0)}.${names[names.length - 1]?.toUpperCase()}`;
+                  const t = resolveTeacher(id);
+                  return formatTeacherName(t?.displayName || id);
                 }).join(', ');
                 return {
                   room: room?.name || '',
@@ -1087,10 +1178,8 @@ export default function Schedules() {
             } else {
               const roomNames = s.roomIds?.map((id: string) => rooms.find(r => r.id === id)?.name).filter(Boolean).join(' + ') || '';
               const invigs = s.invigilators?.map((id: string) => {
-                const t = teachers.find(teach => teach.uid === id);
-                if (!t) return '';
-                const names = t.displayName.split(' ');
-                return `${names[0]?.charAt(0)}.${names[names.length - 1]?.toUpperCase()}`;
+                const t = resolveTeacher(id);
+                return formatTeacherName(t?.displayName || id);
               }).join(', ') || '';
               return {
                 module: module?.name || '',
@@ -1292,7 +1381,7 @@ export default function Schedules() {
 
   const handleEmailInvigilation = async () => {
     console.log('handleEmailInvigilation called', { selectedTeacherId });
-    const teacher = teachers.find(t => t.uid === selectedTeacherId);
+    const teacher = resolveTeacher(selectedTeacherId);
     
     if (!teacher) {
       toast.error('لم يتم العثور على بيانات الأستاذ');
@@ -1397,7 +1486,7 @@ export default function Schedules() {
 
   const handleEmailWeeklySchedule = async () => {
     console.log('handleEmailWeeklySchedule called', { selectedTeacherId });
-    const teacher = teachers.find(t => t.uid === selectedTeacherId);
+    const teacher = resolveTeacher(selectedTeacherId);
     
     if (!teacher) {
       toast.error('لم يتم العثور على بيانات الأستاذ');
@@ -1516,16 +1605,6 @@ export default function Schedules() {
         await addDoc(collection(db, 'examSessions'), examData);
       }
 
-      // Refresh with year normalization
-      const alternateYear = selectedYear.includes('/') ? selectedYear.replace('/', '-') : selectedYear.replace('-', '/');
-      const yearQueries = [selectedYear];
-      if (alternateYear !== selectedYear) yearQueries.push(alternateYear);
-
-      const snaps = await Promise.all(yearQueries.map(y => getDocs(query(collection(db, 'examSessions'), where('academicYear', '==', y)))));
-      const allSessions = snaps.flatMap(snap => snap.docs.map(d => ({ id: d.id, ...d.data() } as ExamSession)));
-      const fetchedSessions = allSessions.map(e => ({ ...e, academicYear: selectedYear }));
-      
-      setExamSessions(fetchedSessions);
       setShowAddModal(false);
       setEditingExam(null);
       setExamDate('');
@@ -1537,7 +1616,7 @@ export default function Schedules() {
       setRoomAssignments([{ roomId: '', invigilators: [], groups: [], studentCount: 0 }]);
 
       if (applyTimeToLevel && examTime) {
-        await handleUpdateTimeForSpecialty(examSpecialty, examTime, 'level', fetchedSessions);
+        await handleUpdateTimeForSpecialty(examSpecialty, examTime, 'level', examSessions);
       }
       toast.success(editingExam ? 'تم تحديث الامتحان بنجاح' : 'تم إضافة الامتحان بنجاح');
     } catch (err) {
@@ -1825,7 +1904,7 @@ export default function Schedules() {
 
                           const session = getSessionAt(day, period);
                           const module = modules.find(m => m.id === session?.moduleId);
-                          const teacher = teachers.find(t => t.uid === session?.teacherId);
+                          const teacher = resolveTeacher(session?.teacherId);
                           const room = rooms.find(r => r.id === session?.roomId);
                           const hasConflict = session ? hasSemesterConflict(session) : false;
 
@@ -2155,12 +2234,9 @@ export default function Schedules() {
                                   if (exam.mode === 'Simple') {
                                     const roomNames = exam.roomIds?.map(id => rooms.find(r => r.id === id || r.name === id)?.name).filter(Boolean).join(' + ') || 'Room --/--';
                                     const invigNames = exam.invigilators?.map(id => {
-                                      const t = teachers.find(teach => teach.uid === id || teach.email === id || teach.username === id || teach.displayName === id);
-                                      if (!t) return '';
-                                      const displayName = t.displayName || '';
-                                      const names = displayName.split(' ');
-                                      return `${names[0]?.charAt(0).toUpperCase() || ''}.${names[names.length - 1]?.toUpperCase() || ''}`;
-                                    }).filter(Boolean).join(', ') || '';
+                                      const t = resolveTeacher(id);
+                                      return formatTeacherName(t?.displayName || id);
+                                    }).filter(Boolean).sort().join(', ') || '';
 
                                     return (
                                       <div className="relative h-full min-h-[120px] flex flex-col justify-between">
@@ -2447,7 +2523,7 @@ export default function Schedules() {
             <div className="p-6 border-b border-slate-100 flex items-center justify-between min-w-[1200px]">
               <h3 className="font-bold text-slate-900 flex items-center gap-2">
                 <Calendar className="w-5 h-5 text-blue-600" />
-                جدول الحصص الأسبوعي ({teachers.find(t => t.uid === selectedTeacherId)?.displayName || t('loading')})
+                جدول الحصص الأسبوعي ({resolveTeacher(selectedTeacherId)?.displayName || t('loading')})
               </h3>
               <div className="flex gap-2">
                 <button 
@@ -2493,7 +2569,7 @@ export default function Schedules() {
 
                 <div className="text-center space-y-1">
                   <div className="text-2xl font-bold">Weekly Class Schedule</div>
-                  <div className="text-lg text-slate-500 mt-2">Teacher: {teachers.find(t => t.uid === selectedTeacherId)?.displayName}</div>
+                  <div className="text-lg text-slate-500 mt-2">Teacher: {resolveTeacher(selectedTeacherId)?.displayName}</div>
                   <div className="text-sm text-slate-400 font-bold">Semester: {selectedSemester === 'S1' ? 'Semester 1' : 'Semester 2'} | Academic Year: {selectedYear}</div>
                 </div>
               </div>
@@ -2643,7 +2719,7 @@ export default function Schedules() {
                   <div className="font-bold text-lg">قسم الهندسة الميكانيكية</div>
                   <div className="h-0.5 bg-black w-full my-4"></div>
                   <div className="text-xl font-bold mt-6">
-                    استدعاء للأستاذ (ة) الفاضل (ة): {teachers.find(t => t.uid === selectedTeacherId)?.displayName}
+                    استدعاء للأستاذ (ة) الفاضل (ة): {resolveTeacher(selectedTeacherId)?.displayName}
                   </div>
                   <div className="text-2xl font-bold mt-4 underline">جدول الحراسة - {selectedSemester === 'S1' ? 'السداسي الأول' : 'السداسي الثاني'}</div>
                 </div>
