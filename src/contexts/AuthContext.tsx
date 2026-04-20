@@ -44,20 +44,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             // Link seeded user to this UID
             const seededDoc = querySnapshot.docs[0];
             const seededData = seededDoc.data();
-            const username = (fUser.email || seededData.email).split('@')[0].toLowerCase();
+            const username = (fUser.email || seededData.email || '').split('@')[0].toLowerCase();
             userData = {
               ...seededData,
               uid: fUser.uid,
-              displayName: fUser.displayName || seededData.displayName,
+              displayName: fUser.displayName || seededData.displayName || seededData.name,
               username,
-              isActive: true, // Automatically activate when linking
+              isActive: true,
             } as User;
             
             await setDoc(userDocRef, userData);
-            await setDoc(doc(db, 'usernames', username), { email: userData.email });
-            // Delete the seeded doc with random ID to avoid duplicates
-            if (seededDoc.id !== fUser.uid) {
-              await deleteDoc(seededDoc.ref);
+            // Don't delete the old doc immediately if it's referenced by email or other ID
+            // Just update its mapped UID if needed
+            if (username) {
+              await setDoc(doc(db, 'usernames', username), { email: userData.email, uid: userData.uid });
             }
           } else {
             // Create new profile

@@ -18,19 +18,20 @@ import OvertimeCalc from './components/OvertimeCalc';
 import Certificates from './components/Certificates';
 import FieldVisits from './components/FieldVisits';
 import TeacherReports from './components/TeacherReports';
-import { Bell, Search, User as UserIcon, Plus, Archive, MessageSquare } from 'lucide-react';
+import { Bell, Search, User as UserIcon, Plus, Archive, MessageSquare, Trash2 } from 'lucide-react';
 import { cn } from './lib/utils';
 import { seedInitialData } from './lib/seed';
-import toast from 'react-hot-toast';
+import toast, { Toaster } from 'react-hot-toast';
 import { useTranslation } from 'react-i18next';
 import { NotificationProvider } from './contexts/NotificationContext';
 import { NotificationCenter } from './components/NotificationCenter';
 
 export default function App() {
   const { user, loading: authLoading, isAdmin, setSimulatedRole, simulatedRole } = useAuth();
-  const { selectedYear, setSelectedYear, availableYears, addYear, isYearArchived, loading: yearLoading } = useAcademicYear();
+  const { selectedYear, setSelectedYear, availableYears, addYear, deleteYear, isYearArchived, loading: yearLoading } = useAcademicYear();
   const { t, i18n } = useTranslation();
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [promptConfig, setPromptConfig] = useState<{
     show: boolean;
     title: string;
@@ -60,14 +61,14 @@ export default function App() {
   }, [i18n.language]);
 
   useEffect(() => {
-    if (user?.role === 'admin' || user?.email === 't.mansouri@lagh-univ.dz') {
+    if (user?.role === 'admin' || user?.role === 'vice_admin' || user?.email === 't.mansouri@lagh-univ.dz') {
       const autoSeed = async () => {
         try {
           const lastSeed = localStorage.getItem('last_seed_v2');
           if (lastSeed === 'done') return;
 
           console.log('Admin detected: Triggering one-time auto-seed for new modules...');
-          const seeded = await seedInitialData(true); // Force seed to ensure all new modules are added
+          const seeded = await seedInitialData(true); 
           if (seeded) {
             console.log('Seeding done, marking as complete and reloading...');
             localStorage.setItem('last_seed_v2', 'done');
@@ -117,9 +118,10 @@ export default function App() {
   return (
     <NotificationProvider>
       <div className="flex min-h-screen bg-slate-50" dir={i18n.language === 'ar' ? 'rtl' : 'ltr'}>
-      <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
-      
-      <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        <Toaster position="top-center" reverseOrder={false} />
+        <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
+        
+        <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <header className="h-16 bg-white border-b border-slate-100 flex items-center justify-between px-8 sticky top-0 z-30">
           <div className="flex items-center gap-4 flex-1">
             <div className="relative max-w-md w-full hidden md:block">
@@ -157,29 +159,40 @@ export default function App() {
                   ))}
                 </select>
                 {isAdmin && (
-                  <button 
-                    onClick={() => {
-                      setPromptValue('');
-                      setPromptConfig({
-                        show: true,
-                        title: t('new_year_prompt'),
-                        onConfirm: async (nextYear) => {
-                          if (nextYear) {
-                            try {
-                              await addYear(nextYear);
-                              toast.success(t('add_year_success'));
-                            } catch (err) {
-                              toast.error(t('add_year_error'));
+                  <div className="flex items-center gap-1">
+                    <button 
+                      onClick={() => {
+                        setPromptValue('');
+                        setPromptConfig({
+                          show: true,
+                          title: t('new_year_prompt'),
+                          onConfirm: async (nextYear) => {
+                            if (nextYear) {
+                              try {
+                                await addYear(nextYear);
+                                toast.success(t('add_year_success'));
+                              } catch (err) {
+                                toast.error(t('add_year_error'));
+                              }
                             }
                           }
-                        }
-                      });
-                    }}
-                    className="p-1 hover:bg-white rounded-lg text-slate-400 hover:text-blue-600 transition-all"
-                    title={t('add')}
-                  >
-                    <Plus className="w-3 h-3" />
-                  </button>
+                        });
+                      }}
+                      className="p-1 hover:bg-white rounded-lg text-slate-400 hover:text-blue-600 transition-all border border-transparent hover:border-slate-100"
+                      title={t('add')}
+                    >
+                      <Plus className="w-3 h-3" />
+                    </button>
+                    {availableYears.length > 1 && (
+                      <button 
+                        onClick={() => setShowDeleteConfirm(true)}
+                        className="p-1 hover:bg-white rounded-lg text-slate-400 hover:text-red-600 transition-all border border-transparent hover:border-slate-100"
+                        title={t('delete')}
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
                 )}
               </div>
 
@@ -255,6 +268,44 @@ export default function App() {
               </button>
               <button 
                 onClick={() => setPromptConfig(prev => ({ ...prev, show: false }))}
+                className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl font-bold hover:bg-slate-200 transition-all"
+              >
+                {t('cancel')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Year Confirmation Modal */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl p-8 space-y-6 text-center">
+            <div className="w-20 h-20 bg-red-50 rounded-full flex items-center justify-center mx-auto">
+              <Trash2 className="w-10 h-10 text-red-600" />
+            </div>
+            <div>
+              <h3 className="text-xl font-bold text-slate-900">{t('delete_confirm_title')}</h3>
+              <p className="text-slate-500 mt-2">{t('delete_year_confirm', { year: selectedYear })}</p>
+            </div>
+            <div className="flex gap-3">
+              <button 
+                onClick={async () => {
+                  setShowDeleteConfirm(false);
+                  try {
+                    const toastId = toast.loading(t('loading'));
+                    await deleteYear(selectedYear);
+                    toast.success(t('year_deleted_success'), { id: toastId });
+                  } catch (err) {
+                    toast.error(t('year_deleted_error'));
+                  }
+                }}
+                className="flex-1 bg-red-600 text-white py-3 rounded-xl font-bold hover:bg-red-700 transition-all"
+              >
+                {t('delete')}
+              </button>
+              <button 
+                onClick={() => setShowDeleteConfirm(false)}
                 className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl font-bold hover:bg-slate-200 transition-all"
               >
                 {t('cancel')}

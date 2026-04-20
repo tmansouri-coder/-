@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, query, where, setDoc, getDoc } from 'firebase/firestore';
+import React, { useState, useEffect, useMemo } from 'react';
+import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, query, where, setDoc, getDoc, writeBatch, onSnapshot } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
@@ -12,7 +12,7 @@ import {
   Plus, Trash2, Edit2, Download, Filter,
   ChevronRight, ChevronLeft, Search, ClipboardList,
   AlertTriangle, Mail, Copy, X, ShieldAlert, ShieldCheck,
-  RefreshCw
+  RefreshCw, FileText
 } from 'lucide-react';
 import { cn, mapLevelName } from '../lib/utils';
 import jsPDF from 'jspdf';
@@ -20,6 +20,7 @@ import autoTable from 'jspdf-autotable';
 import 'jspdf-autotable';
 import html2canvas from 'html2canvas';
 import toast from 'react-hot-toast';
+import PDFScheduleImporter from './PDFScheduleImporter';
 
 type ScheduleTab = 'semester' | 'exams' | 'halls' | 'personal';
 
@@ -60,6 +61,7 @@ export default function Schedules() {
   const [activeTab, setActiveTab] = useState<ScheduleTab>('semester');
   const [loading, setLoading] = useState(true);
   const [copying, setCopying] = useState(false);
+  const [showImporter, setShowImporter] = useState(false);
 
   // Data
   const [cycles, setCycles] = useState<Cycle[]>([]);
@@ -171,10 +173,12 @@ export default function Schedules() {
   };
 
   useEffect(() => {
+    let unsubscribeSchedules: () => void;
+    let unsubscribeExams: () => void;
+
     const fetchData = async () => {
       setLoading(true);
       try {
-        // Fetch all relevant academic years (support both - and / formats)
         const alternateYear = selectedYear.includes('/') ? selectedYear.replace('/', '-') : selectedYear.replace('-', '/');
         const yearQueries = [selectedYear];
         if (alternateYear !== selectedYear) yearQueries.push(alternateYear);
@@ -193,10 +197,6 @@ export default function Schedules() {
           getDoc(doc(db, 'settings', 'examDates')),
         ]);
 
-        // Fetch sessions for all year variants
-        const scheduleSnapshots = await Promise.all(yearQueries.map(y => getDocs(query(collection(db, 'scheduleSessions'), where('academicYear', '==', y)))));
-        const examSnapshots = await Promise.all(yearQueries.map(y => getDocs(query(collection(db, 'examSessions'), where('academicYear', '==', y)))));
-
         if (settingsSnap.exists()) {
           setLevelExtraExamDates(settingsSnap.data().levelExtraExamDates || {});
         }
@@ -204,10 +204,8 @@ export default function Schedules() {
         const levelDocs = levelsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Level));
         const specDocs = specialtiesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Specialty));
 
-        // Resilience: If any specialty has a level name/shortcode as levelId instead of ID, fix it in memory
         const correctedSpecialties = specDocs.map(spec => {
           if (!levelDocs.some(l => l.id === spec.levelId)) {
-            // Attempt recovery by name or common acronyms
             const foundLevel = levelDocs.find(l => l.name === spec.levelId || (spec.levelId === 'L1' && l.name.includes("First Year")));
             if (foundLevel) return { ...spec, levelId: foundLevel.id };
           }
@@ -217,10 +215,9 @@ export default function Schedules() {
         setCycles(cyclesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Cycle)));
         setLevels(levelDocs.map(l => ({ ...l, name: mapLevelName(l.name) })));
         setSpecialties(correctedSpecialties);
-        
-        // Fetch all modules (shared across years)
         setModules(modulesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Module)));
         setRooms(roomsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Room)));
+        
         const uniqueTeachers = Array.from(new Map(teachersSnap.docs.map(d => {
           const data = d.data();
           const teacher = { 
@@ -232,18 +229,31 @@ export default function Schedules() {
         })).values());
         setTeachers(uniqueTeachers);
 
-        // Normalize year in memory for all sessions
-        const allScheduleSessions = scheduleSnapshots.flatMap(snap => snap.docs.map(d => ({ id: d.id, ...d.data() } as ScheduleSession)));
-        const allExamSessions = examSnapshots.flatMap(snap => snap.docs.map(d => ({ id: d.id, ...d.data() } as ExamSession)));
-        
-        setScheduleSessions(allScheduleSessions.map(s => ({ ...s, academicYear: selectedYear })));
-        setExamSessions(allExamSessions.map(e => ({ ...e, academicYear: selectedYear })));
+        // Real-time synchronization for sessions
+        const schedQuery = query(collection(db, 'scheduleSessions'), where('academicYear', 'in', yearQueries));
+        unsubscribeSchedules = onSnapshot(schedQuery, (snap) => {
+          const docs = snap.docs.map(d => ({ id: d.id, ...d.data(), academicYear: selectedYear } as ScheduleSession));
+          setScheduleSessions(docs);
+        });
+
+        const examQuery = query(collection(db, 'examSessions'), where('academicYear', 'in', yearQueries));
+        unsubscribeExams = onSnapshot(examQuery, (snap) => {
+          const docs = snap.docs.map(d => ({ id: d.id, ...d.data(), academicYear: selectedYear } as ExamSession));
+          setExamSessions(docs);
+        });
+
         setLoading(false);
       } catch (err) {
-        handleFirestoreError(err, OperationType.LIST, 'multiple_collections');
+        console.error('Fetch error:', err);
+        setLoading(false);
       }
     };
+
     fetchData();
+    return () => {
+      if (unsubscribeSchedules) unsubscribeSchedules();
+      if (unsubscribeExams) unsubscribeExams();
+    };
   }, [selectedYear]);
 
   const getTeacherExamCount = (teacherId: string) => {
@@ -340,12 +350,49 @@ export default function Schedules() {
     }
   };
 
-  const filteredLevels = levels.filter(l => l.cycleId === selectedCycle);
-  const filteredSpecialties = specialties.filter(s => s.levelId === selectedLevel);
-  const filteredModules = modules.filter(m => m.specialtyId === selectedSpecialty && m.semester === selectedSemester);
+  const filteredLevels = useMemo(() => 
+    levels.filter(l => l.cycleId === selectedCycle),
+    [levels, selectedCycle]
+  );
+  
+  const filteredSpecialties = useMemo(() => 
+    specialties.filter(s => s.levelId === selectedLevel),
+    [specialties, selectedLevel]
+  );
+
+  const semesterSessionsMap = useMemo(() => {
+    const map = new Map<string, ScheduleSession>();
+    if (activeTab === 'semester' && selectedSpecialty) {
+      scheduleSessions.forEach(s => {
+        if (s.specialtyId === selectedSpecialty && s.semester === selectedSemester) {
+          map.set(`${s.day}-${s.period}`, s);
+        }
+      });
+    }
+    return map;
+  }, [scheduleSessions, selectedSpecialty, selectedSemester, activeTab]);
+
+  const examSessionsMap = useMemo(() => {
+    const map = new Map<string, ExamSession[]>();
+    if (activeTab === 'exams') {
+      examSessions.forEach(s => {
+        if (s.semester === selectedSemester && (selectedExamType === 'All' || s.type === selectedExamType)) {
+          const key = `${s.date}-${s.specialtyId}`;
+          if (!map.has(key)) map.set(key, []);
+          map.get(key)!.push(s);
+        }
+      });
+    }
+    return map;
+  }, [examSessions, selectedSemester, selectedExamType, activeTab]);
+
+  const filteredModules = useMemo(() => 
+    modules.filter(m => m.specialtyId === selectedSpecialty && m.semester === selectedSemester),
+    [modules, selectedSpecialty, selectedSemester]
+  );
 
   const getExamSessionsAt = (date: string, specialtyId: string) => {
-    return examSessions.find(s => s.date === date && s.specialtyId === specialtyId && s.semester === selectedSemester);
+    return examSessionsMap.get(`${date}-${specialtyId}`)?.[0];
   };
 
   const getHallSessionsAt = (day: string, period: string, roomId: string) => {
@@ -357,13 +404,22 @@ export default function Schedules() {
   };
 
   const getSessionAt = (day: string, period: string) => {
-    return scheduleSessions.find(s => 
-      s.day === day && 
-      s.period === period && 
-      s.specialtyId === selectedSpecialty && 
-      s.semester === selectedSemester
-    );
+    return semesterSessionsMap.get(`${day}-${period}`);
   };
+
+  const currentLevelExamDates = useMemo(() => {
+    if (activeTab !== 'exams' || !selectedLevel) return [];
+    
+    const specsIds = filteredSpecialties.map(s => s.id);
+    const existingDates = Array.from(new Set(examSessions.filter(s => 
+      s.semester === selectedSemester && 
+      (selectedExamType === 'All' || s.type === selectedExamType) &&
+      specsIds.includes(s.specialtyId)
+    ).map(s => s.date)));
+    
+    const extraForLevel = levelExtraExamDates[selectedLevel] || [];
+    return Array.from(new Set([...existingDates, ...extraForLevel])).sort();
+  }, [examSessions, selectedSemester, selectedExamType, filteredSpecialties, levelExtraExamDates, selectedLevel, activeTab]);
 
   const getSessionSpan = (day: string, period: string) => {
     const session = getSessionAt(day, period);
@@ -541,58 +597,107 @@ export default function Schedules() {
       message: 'سيقوم النظام بفحص قاعدة البيانات بالكامل لإصلاح التنسيقات الخاطئة للأعوام الدراسية وتصحيح ارتباطات الامتحانات والحصص. هل تريد الاستمرار؟',
       type: 'info',
       onConfirm: async () => {
-        setConfirmState(prev => ({ ...prev, show: false }));
         const toastId = toast.loading('جاري فحص وإصلاح قاعدة البيانات...');
         try {
-          // 1. Fetch ALL exams and sessions regardless of current filtered state
-          const [examSnap, scheduleSnap] = await Promise.all([
+          // 1. Fetch ALL fresh data to ensure accurate matching
+          const [
+            examSnap, scheduleSnap, specialtiesSnap, 
+            modulesSnap, levelsSnap, teachersSnap
+          ] = await Promise.all([
             getDocs(collection(db, 'examSessions')),
-            getDocs(collection(db, 'scheduleSessions'))
+            getDocs(collection(db, 'scheduleSessions')),
+            getDocs(collection(db, 'specialties')),
+            getDocs(collection(db, 'modules')),
+            getDocs(collection(db, 'levels')),
+            getDocs(collection(db, 'users'))
           ]);
 
+          const freshSpecialties = specialtiesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Specialty));
+          const freshModules = modulesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Module));
+          const freshLevels = levelsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Level));
+          const freshTeachers = teachersSnap.docs.map(d => ({ uid: d.id, ...d.data() } as User));
+
           let repairCount = 0;
+          let batch = writeBatch(db);
+          let batchCount = 0;
           const alternateYear = selectedYear.includes('/') ? selectedYear.replace('/', '-') : selectedYear.replace('-', '/');
 
-          // Repair Exams
+          // 1. Repair Exams
           for (const d of examSnap.docs) {
             const exam = d.data() as ExamSession;
             let needsUpdate = false;
             let newData: any = {};
 
-            // Fix Year format (if it matches selectedYear or its alternate)
             if (exam.academicYear === alternateYear || !exam.academicYear) {
               newData.academicYear = selectedYear;
               needsUpdate = true;
             }
 
-            // Fix Specialty/Level mismatch
             let currentSpecId = newData.specialtyId || exam.specialtyId;
-            const levelByName = levels.find(l => l.name === currentSpecId || l.id === currentSpecId);
-            if (levelByName) {
-               const spec = specialties.find(s => s.levelId === levelByName.id);
+            const existingSpec = freshSpecialties.find(s => s.id === currentSpecId);
+            if (!existingSpec && currentSpecId) {
+              const specByAnyMeans = freshSpecialties.find(s => s.id === currentSpecId || s.name === currentSpecId);
+              if (specByAnyMeans) {
+                newData.specialtyId = specByAnyMeans.id;
+                currentSpecId = specByAnyMeans.id;
+                needsUpdate = true;
+              }
+            }
+
+            const existingMod = freshModules.find(m => m.id === exam.moduleId);
+            if (!existingMod && exam.moduleId) {
+              const modByName = freshModules.find(m => 
+                (m.name === exam.moduleId || m.id === exam.moduleId) && 
+                (currentSpecId ? m.specialtyId === currentSpecId : true)
+              );
+              if (modByName) {
+                newData.moduleId = modByName.id;
+                if (!currentSpecId && modByName.specialtyId) {
+                   newData.specialtyId = modByName.specialtyId;
+                   currentSpecId = modByName.specialtyId;
+                }
+                needsUpdate = true;
+              }
+            }
+
+            const levelByName = freshLevels.find(l => l.name === currentSpecId || l.id === currentSpecId);
+            if (levelByName && !freshSpecialties.some(s => s.id === currentSpecId)) {
+               const spec = freshSpecialties.find(s => s.levelId === levelByName.id);
                if (spec) {
                  newData.specialtyId = spec.id;
-                 currentSpecId = spec.id;
                  needsUpdate = true;
                }
             }
 
-            // Fix missing SpecialtyId using ModuleId linkage
-            if (!currentSpecId && exam.moduleId) {
-              const module = modules.find(m => m.id === exam.moduleId);
-              if (module && module.specialtyId) {
-                newData.specialtyId = module.specialtyId;
+            if (exam.invigilators && Array.isArray(exam.invigilators)) {
+              let invigsChanged = false;
+              const newInvigs = exam.invigilators.map(invigId => {
+                const teacher = freshTeachers.find(t => t.uid === invigId || t.email === invigId || t.username === invigId);
+                if (teacher && teacher.uid !== invigId) {
+                  invigsChanged = true;
+                  return teacher.uid;
+                }
+                return invigId;
+              });
+              if (invigsChanged) {
+                newData.invigilators = newInvigs;
                 needsUpdate = true;
               }
             }
 
             if (needsUpdate) {
-              await updateDoc(d.ref, newData);
+              batch.update(d.ref, newData);
               repairCount++;
+              batchCount++;
+              if (batchCount === 450) {
+                await batch.commit();
+                batch = writeBatch(db);
+                batchCount = 0;
+              }
             }
           }
 
-          // Repair Schedule Sessions
+          // 2. Repair Schedule Sessions
           for (const d of scheduleSnap.docs) {
             const session = d.data() as ScheduleSession;
             let needsUpdate = false;
@@ -603,22 +708,37 @@ export default function Schedules() {
               needsUpdate = true;
             }
 
+            if (!freshSpecialties.some(s => s.id === session.specialtyId)) {
+              const foundSpec = freshSpecialties.find(s => s.name === session.specialtyId || s.id === session.specialtyId);
+              if (foundSpec) {
+                newData.specialtyId = foundSpec.id;
+                needsUpdate = true;
+              }
+            }
+
             if (needsUpdate) {
-              await updateDoc(d.ref, newData);
+              batch.update(d.ref, newData);
               repairCount++;
+              batchCount++;
+              if (batchCount === 450) {
+                await batch.commit();
+                batch = writeBatch(db);
+                batchCount = 0;
+              }
             }
           }
 
+          if (batchCount > 0) await batch.commit();
+
           if (repairCount > 0) {
-            // Force a full re-fetch of data to update UI
-            window.location.reload(); 
-            toast.success(`تم إصلاح ${repairCount} سجل بنجاح`, { id: toastId });
+            toast.success(`تم إصلاح ${repairCount} سجل بنجاح. جاري تحديث بيانات الصفحة...`, { id: toastId });
+            setTimeout(() => window.location.reload(), 1500);
           } else {
-            toast.success('لم يتم العثور على مشاكل في البيانات', { id: toastId });
+            toast.success('قاعدة البيانات سليمة، لم يتم العثور على أخطاء للعام المحدد.', { id: toastId });
           }
         } catch (err) {
           console.error('Global repair failed:', err);
-          toast.error('فشل عملية الإصلاح الشاملة', { id: toastId });
+          toast.error('فشل عملية الإصلاح الشاملة. يرجى التحقق من الاتصال.', { id: toastId });
         }
       }
     });
@@ -674,7 +794,7 @@ export default function Schedules() {
       day: formData.get('day') as any,
       period: formData.get('period') as any,
       type: formData.get('type') as any,
-      academicYear: selectedYear,
+      academicYear: selectedYear.replace('-', '/'),
       isExternal: formData.get('isExternal') === 'true',
       externalModuleName: formData.get('externalModuleName') as string,
       isReserved: formData.get('isReserved') === 'true',
@@ -1364,7 +1484,7 @@ export default function Schedules() {
       time: examTime,
       type: formExamType,
       mode: examMode,
-      academicYear: selectedYear,
+      academicYear: selectedYear.replace('-', '/'),
     };
 
     if (examMode === 'Simple') {
@@ -1437,6 +1557,14 @@ export default function Schedules() {
         <div className="flex gap-2">
           {(isAdmin || isViceAdmin) && (
             <>
+              <button 
+                onClick={() => setShowImporter(true)}
+                className="flex items-center gap-2 px-4 py-2 bg-purple-50 text-purple-600 border border-purple-100 rounded-xl hover:bg-purple-100 transition-all shadow-sm"
+                title="استيراد من ملف PDF"
+              >
+                <FileText className="w-4 h-4" />
+                <span>استيراد PDF</span>
+              </button>
               <button 
                 onClick={handleRepairExams}
                 className="flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-600 rounded-xl hover:bg-blue-100 transition-all shadow-sm border border-blue-100"
@@ -1869,22 +1997,14 @@ export default function Schedules() {
               </thead>
               <tbody>
                 {(() => {
-                  const specsInLevel = specialties.filter(s => s.levelId === selectedLevel).map(s => s.id);
-                  const existingDates = Array.from(new Set(examSessions.filter(s => 
-                    s.semester === selectedSemester && 
-                    (selectedExamType === 'All' || s.type === selectedExamType) &&
-                    specsInLevel.includes(s.specialtyId)
-                  ).map(s => s.date)));
-                  
                   const extraForLevel = levelExtraExamDates[selectedLevel] || [];
-                  const dates = Array.from(new Set([...existingDates, ...extraForLevel])).sort();
-
-                  return dates.map(date => {
+                  return currentLevelExamDates.map(date => {
                   const dateObj = new Date(date);
                   const dayName = dateObj.toLocaleDateString('ar-DZ', { weekday: 'long' });
                   const formattedDate = date.split('-').reverse().join('/');
                   const isExtra = extraForLevel.includes(date);
-                  const hasExamsOnThisDate = existingDates.includes(date);
+                  const existingDatesInState = Array.from(new Set(examSessions.filter(s => s.semester === selectedSemester).map(s => s.date)));
+                  const hasExamsOnThisDate = existingDatesInState.includes(date);
                   
                   return (
                     <tr key={date} className="border-b-2 border-black last:border-0">
@@ -1991,7 +2111,7 @@ export default function Schedules() {
                         </div>
                       </td>
                       {specialties.filter(s => s.levelId === selectedLevel).map((spec) => {
-                        const sessions = examSessions.filter(s => s.date === date && s.specialtyId === spec.id && s.semester === selectedSemester && (selectedExamType === 'All' || s.type === selectedExamType));
+                        const sessions = examSessionsMap.get(`${date}-${spec.id}`) || [];
                         
                         return (
                           <td 
@@ -2029,17 +2149,18 @@ export default function Schedules() {
                           >
                             <div className="p-4 min-h-[160px] h-full w-full flex flex-col">
                               {sessions.map(exam => {
-                                const module = modules.find(m => m.id === exam.moduleId);
+                                const module = modules.find(m => m.id === exam.moduleId || m.name === exam.moduleId);
                                 
                                 const renderRoomInfo = () => {
                                   if (exam.mode === 'Simple') {
-                                    const roomNames = exam.roomIds?.map(id => rooms.find(r => r.id === id)?.name).filter(Boolean).join(' + ') || 'Room --/--';
+                                    const roomNames = exam.roomIds?.map(id => rooms.find(r => r.id === id || r.name === id)?.name).filter(Boolean).join(' + ') || 'Room --/--';
                                     const invigNames = exam.invigilators?.map(id => {
-                                      const t = teachers.find(teach => teach.uid === id);
+                                      const t = teachers.find(teach => teach.uid === id || teach.email === id || teach.username === id || teach.displayName === id);
                                       if (!t) return '';
-                                      const names = t.displayName.split(' ');
-                                      return `${names[0]?.charAt(0).toUpperCase()}.${names[names.length - 1]?.toUpperCase()}`;
-                                    }).join(', ') || '';
+                                      const displayName = t.displayName || '';
+                                      const names = displayName.split(' ');
+                                      return `${names[0]?.charAt(0).toUpperCase() || ''}.${names[names.length - 1]?.toUpperCase() || ''}`;
+                                    }).filter(Boolean).join(', ') || '';
 
                                     return (
                                       <div className="relative h-full min-h-[120px] flex flex-col justify-between">
@@ -2082,7 +2203,7 @@ export default function Schedules() {
                                           {/* Rooms/Groups at Bottom */}
                                           <div className="flex flex-wrap justify-between items-end mt-auto gap-2">
                                             {exam.roomAssignments?.map((ra, idx) => {
-                                              const room = rooms.find(r => r.id === ra.roomId);
+                                              const room = rooms.find(r => r.id === ra.roomId || r.name === ra.roomId);
                                               const groupText = ra.groups && ra.groups.length > 0 ? ` (${ra.groups.join(', ')})` : '';
                                               return (
                                                 <div 
@@ -2226,8 +2347,8 @@ export default function Schedules() {
                     </td>
                     {PERIODS.map(period => {
                       const session = getHallSessionsAt(day, period, selectedRoom);
-                      const module = modules.find(m => m.id === session?.moduleId);
-                      const specialty = specialties.find(s => s.id === session?.specialtyId);
+                      const module = modules.find(m => m.id === session?.moduleId || m.name === session?.moduleId);
+                      const specialty = specialties.find(s => s.id === session?.specialtyId || s.name === session?.specialtyId);
 
                       return (
                         <td key={period} className="p-2 border-l border-slate-100 h-32 relative group">
@@ -2403,9 +2524,9 @@ export default function Schedules() {
                               <div className="flex flex-col gap-2 h-full">
                                 {sessions.length > 0 ? (
                                   sessions.map((session, idx) => {
-                                    const module = modules.find(m => m.id === session.moduleId);
-                                    const room = rooms.find(r => r.id === session.roomId);
-                                    const specialty = specialties.find(s => s.id === session.specialtyId);
+                                    const module = modules.find(m => m.id === session.moduleId || m.name === session.moduleId);
+                                    const room = rooms.find(r => r.id === session.roomId || r.name === session.roomId);
+                                    const specialty = specialties.find(s => s.id === session.specialtyId || s.name === session.specialtyId);
 
                                     return (
                                       <div key={idx} className={cn(
@@ -3320,7 +3441,11 @@ export default function Schedules() {
           </div>
           <div className="flex gap-3">
             <button 
-              onClick={() => confirmState.onConfirm()}
+              onClick={(e) => {
+                e.preventDefault();
+                setConfirmState(prev => ({ ...prev, show: false }));
+                confirmState.onConfirm();
+              }}
               className={cn(
                 "flex-1 text-white py-3 rounded-xl font-bold transition-all",
                 confirmState.type === 'danger' ? "bg-red-600 hover:bg-red-700" : confirmState.type === 'warning' ? "bg-amber-600 hover:bg-amber-700" : "bg-blue-600 hover:bg-blue-700"
@@ -3368,6 +3493,20 @@ export default function Schedules() {
           </div>
         </div>
       </div>
+    )}
+    {/* Import PDF Modal */}
+    {showImporter && (
+      <PDFScheduleImporter 
+        onClose={() => setShowImporter(false)}
+        academicYear={selectedYear}
+        modules={modules}
+        teachers={teachers}
+        rooms={rooms}
+        specialties={specialties}
+        type={activeTab === 'exams' ? 'exams' : 'semester'}
+        selectedLevelId={selectedLevel}
+        selectedLevelName={levels.find(l => l.id === selectedLevel)?.name}
+      />
     )}
   </div>
 );

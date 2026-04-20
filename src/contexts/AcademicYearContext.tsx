@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { collection, getDocs, setDoc, doc, query, orderBy, onSnapshot } from 'firebase/firestore';
+import { collection, getDocs, setDoc, deleteDoc, doc, query, orderBy, onSnapshot } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuth } from './AuthContext';
 
@@ -8,6 +8,7 @@ interface AcademicYearContextType {
   setSelectedYear: (year: string) => void;
   availableYears: string[];
   addYear: (year: string) => Promise<void>;
+  deleteYear: (year: string) => Promise<void>;
   isYearArchived: boolean;
   loading: boolean;
 }
@@ -70,10 +71,19 @@ export function AcademicYearProvider({ children }: { children: React.ReactNode }
     }
   };
 
+  const deleteYear = async (year: string) => {
+    try {
+      await deleteDoc(doc(db, 'academicYears', year.replace('/', '-')));
+    } catch (err) {
+      console.error('Failed to delete academic year:', err);
+      throw err;
+    }
+  };
+
   const isYearArchived = selectedYear !== availableYears[0];
 
   return (
-    <AcademicYearContext.Provider value={{ selectedYear, setSelectedYear, availableYears, addYear, isYearArchived, loading }}>
+    <AcademicYearContext.Provider value={{ selectedYear, setSelectedYear, availableYears, addYear, deleteYear, isYearArchived, loading }}>
       {children}
     </AcademicYearContext.Provider>
   );

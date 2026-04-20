@@ -1,6 +1,6 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Settings as SettingsIcon, Bell, Shield, Database, Globe, Save, Download, Upload, Trash2, Loader2 } from 'lucide-react';
-import { collection, getDocs, writeBatch, doc, deleteDoc } from 'firebase/firestore';
+import { collection, getDocs, writeBatch, doc, deleteDoc, getDoc, setDoc } from 'firebase/firestore';
 import { initializeApp, deleteApp } from 'firebase/app';
 import { getAuth, createUserWithEmailAndPassword } from 'firebase/auth';
 import { db, handleFirestoreError, OperationType, firebaseConfig } from '../lib/firebase';
@@ -17,8 +17,48 @@ export default function Settings() {
   const [isImporting, setIsImporting] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [showImportConfirm, setShowImportConfirm] = useState<{ file: File } | null>(null);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
+
+  const [deptSettings, setDeptSettings] = useState({
+    departmentName: '',
+    facultyName: '',
+    departmentEmail: 'mech.eng@univ.dz'
+  });
+
+  useEffect(() => {
+    const fetchSettings = async () => {
+      try {
+        const settingsDoc = await getDoc(doc(db, 'settings', 'general'));
+        if (settingsDoc.exists()) {
+          setDeptSettings(prev => ({ ...prev, ...settingsDoc.data() }));
+        } else {
+          setDeptSettings({
+            departmentName: t('mechanical_engineering'),
+            facultyName: t('faculty_tech') || 'كلية التكنولوجيا',
+            departmentEmail: 'mech.eng@univ.dz'
+          });
+        }
+      } catch (err) {
+        console.error('Failed to fetch settings:', err);
+      }
+    };
+    fetchSettings();
+  }, [t]);
+
+  const handleSaveSettings = async () => {
+    setIsSaving(true);
+    try {
+      await setDoc(doc(db, 'settings', 'general'), deptSettings, { merge: true });
+      toast.success(t('save_success') || 'تم حفظ التغييرات بنجاح');
+    } catch (err) {
+      console.error('Failed to save settings:', err);
+      toast.error(t('save_error') || 'فشل حفظ التغييرات');
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   const collectionsToBackup = [
     'users', 'specialties', 'levels', 'cycles', 'modules', 'rooms', 
@@ -131,7 +171,8 @@ export default function Settings() {
         if (totalDocs === 0) {
           toast.error('لم يتم العثور على بيانات صالحة في الملف');
         } else {
-          toast.success(`تمت عملية الاستيراد! بنجاح: ${successCount}${failCount > 0 ? `، فشل: ${failCount}` : ''}`);
+          toast.success(`تمت عملية الاستيراد بنجاح (${successCount} سجل). جاري تحديث التطبيق...`);
+          setTimeout(() => window.location.reload(), 2000);
         }
       } catch (err) {
         console.error('Import error:', err);
@@ -295,16 +336,28 @@ export default function Settings() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="space-y-2">
                   <label className="text-sm font-bold text-slate-700">{t('department_name') || 'اسم القسم'}</label>
-                  <input defaultValue={t('mechanical_engineering')} className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500" />
+                  <input 
+                    value={deptSettings.departmentName} 
+                    onChange={(e) => setDeptSettings(prev => ({ ...prev, departmentName: e.target.value }))}
+                    className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500" 
+                  />
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-bold text-slate-700">{t('faculty') || 'الكلية'}</label>
-                  <input defaultValue={t('faculty_tech') || 'كلية التكنولوجيا'} className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500" />
+                  <input 
+                    value={deptSettings.facultyName} 
+                    onChange={(e) => setDeptSettings(prev => ({ ...prev, facultyName: e.target.value }))}
+                    className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500" 
+                  />
                 </div>
               </div>
               <div className="space-y-2">
                 <label className="text-sm font-bold text-slate-700">{t('department_email') || 'البريد الإلكتروني للقسم'}</label>
-                <input defaultValue="mech.eng@univ.dz" className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500" />
+                <input 
+                  value={deptSettings.departmentEmail} 
+                  onChange={(e) => setDeptSettings(prev => ({ ...prev, departmentEmail: e.target.value }))}
+                  className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500" 
+                />
               </div>
             </div>
           </div>
@@ -405,9 +458,13 @@ export default function Settings() {
       </div>
 
       <div className="flex justify-end">
-        <button className="flex items-center gap-2 px-8 py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-100">
-          <Save className="w-5 h-5" />
-          حفظ كافة التغييرات
+        <button 
+          onClick={handleSaveSettings}
+          disabled={isSaving}
+          className="flex items-center gap-2 px-8 py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-100 disabled:opacity-50"
+        >
+          {isSaving ? <Loader2 className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />}
+          {t('save_all_changes') || 'حفظ كافة التغييرات'}
         </button>
       </div>
 
