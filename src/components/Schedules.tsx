@@ -350,7 +350,18 @@ export default function Schedules() {
 
   const getTeacherExamCount = (teacherId: string) => {
     return examSessions.filter(s => {
+      if (s.academicYear !== selectedYear) return false;
       if (s.semester !== selectedSemester) return false;
+      if (s.mode === 'Simple') return s.invigilators?.includes(teacherId);
+      return s.roomAssignments?.some(ra => ra.invigilators.includes(teacherId));
+    }).length;
+  };
+
+  const getTeacherDayExamCount = (teacherId: string, date: string) => {
+    if (!date) return 0;
+    return examSessions.filter(s => {
+      if (s.academicYear !== selectedYear) return false;
+      if (s.date !== date) return false;
       if (s.mode === 'Simple') return s.invigilators?.includes(teacherId);
       return s.roomAssignments?.some(ra => ra.invigilators.includes(teacherId));
     }).length;
@@ -387,7 +398,25 @@ export default function Schedules() {
       const conflictingTeacherId = invigs1?.find(id => invigs2?.includes(id));
       if (conflictingTeacherId) {
         const teacher = resolveTeacher(conflictingTeacherId);
-        return { type: 'أستاذ', name: teacher?.displayName || '' };
+        return { type: 'أستاذ', name: teacher?.displayName || '', isSameTime: true };
+      }
+    }
+
+    // Daily Load Warning (different time, same day)
+    const currentInvigs = exam.mode === 'Simple' ? exam.invigilators : exam.roomAssignments?.flatMap(ra => ra.invigilators) || [];
+    if (exam.date) {
+      for (const id of (currentInvigs || [])) {
+        const otherSessionsSameDay = examSessions.filter(s => s.id !== exam.id && s.date === exam.date && s.time !== exam.time);
+        const existsInOther = otherSessionsSameDay.some(s => 
+          s.mode === 'Simple' 
+            ? s.invigilators?.includes(id) 
+            : s.roomAssignments?.some(ra => ra.invigilators.includes(id))
+        );
+        
+        if (existsInOther) {
+          const teacher = resolveTeacher(id);
+          return { type: 'حراسة مكررة', name: teacher?.displayName || '', isSameTime: false };
+        }
       }
     }
 
@@ -1066,7 +1095,7 @@ export default function Schedules() {
     doc.save(`Schedule_${specialty?.name || 'Export'}.pdf`);
   };
 
-  const exportExamPDF = () => {
+  const exportExamPDF = (includeInvigilators: boolean = true) => {
     const specs = specialties.filter(s => s.levelId === selectedLevel);
     const specIds = specs.map(s => s.id);
     const filteredExams = examSessions.filter(s => 
@@ -1158,10 +1187,10 @@ export default function Schedules() {
             if (s.mode === 'Detailed') {
               const assignments = s.roomAssignments?.map(ra => {
                 const room = rooms.find(r => r.id === ra.roomId);
-                const invigs = ra.invigilators.map(id => {
+                const invigs = includeInvigilators ? ra.invigilators.map(id => {
                   const t = resolveTeacher(id);
                   return formatTeacherName(t?.displayName || id);
-                }).join(', ');
+                }).join(', ') : '';
                 return {
                   room: room?.name || '',
                   invigs,
@@ -1177,10 +1206,10 @@ export default function Schedules() {
               };
             } else {
               const roomNames = s.roomIds?.map((id: string) => rooms.find(r => r.id === id)?.name).filter(Boolean).join(' + ') || '';
-              const invigs = s.invigilators?.map((id: string) => {
+              const invigs = includeInvigilators ? s.invigilators?.map((id: string) => {
                 const t = resolveTeacher(id);
                 return formatTeacherName(t?.displayName || id);
-              }).join(', ') || '';
+              }).join(', ') || '' : '';
               return {
                 module: module?.name || '',
                 room: roomNames,
@@ -1688,6 +1717,16 @@ export default function Schedules() {
             <Download className="w-4 h-4" />
             <span>تحميل PDF</span>
           </button>
+          {activeTab === 'exams' && (
+            <button 
+              onClick={() => exportExamPDF(false)}
+              className="flex items-center gap-2 px-4 py-2 bg-blue-50 border border-blue-100 rounded-xl text-blue-600 hover:bg-blue-100 transition-all shadow-sm"
+              title="نسخة خاصة بالطلبة لا تحتوي على أسماء الحراس"
+            >
+              <FileText className="w-4 h-4" />
+              <span>نسخة الطلبة (بدون حراس)</span>
+            </button>
+          )}
           {(isAdmin || isViceAdmin) && (
             <button 
               onClick={() => { 
@@ -3153,16 +3192,23 @@ export default function Schedules() {
                       roomIds: examRooms,
                       invigilators: examInvigilators,
                       roomAssignments: roomAssignments
-                    }) as { type: string, name: string } | null;
+                    }) as { type: string, name: string, isSameTime: boolean } | null;
 
                     if (conflict) {
                       return (
-                        <div className="p-4 bg-red-50 border border-red-200 rounded-2xl flex items-start gap-3 animate-pulse">
-                          <AlertTriangle className="w-5 h-5 text-red-600 mt-0.5" />
+                        <div className={cn(
+                          "p-4 border rounded-2xl flex items-start gap-3",
+                          conflict.isSameTime ? "bg-red-50 border-red-200 animate-pulse" : "bg-orange-50 border-orange-200"
+                        )}>
+                          <AlertTriangle className={cn("w-5 h-5 mt-0.5", conflict.isSameTime ? "text-red-600" : "text-orange-600")} />
                           <div>
-                            <h4 className="font-bold text-red-900 text-sm">تنبيه تضارب!</h4>
-                            <p className="text-xs text-red-700 mt-1">
-                              يوجد تضارب من نوع <strong>({conflict.type})</strong> مع: <strong>{conflict.name}</strong> في نفس التوقيت.
+                            <h4 className={cn("font-bold text-sm", conflict.isSameTime ? "text-red-900" : "text-orange-900")}>
+                              {conflict.isSameTime ? 'تنبيه تضارب!' : 'تنبيه: حراسة إضافية'}
+                            </h4>
+                            <p className={cn("text-xs mt-1", conflict.isSameTime ? "text-red-700" : "text-orange-700")}>
+                              {conflict.isSameTime 
+                                ? `يوجد تضارب من نوع (${conflict.type}) مع: ${conflict.name} في نفس التوقيت.`
+                                : `الأستاذ ${conflict.name} لديه حراسة أخرى في نفس اليوم بنجاح.`}
                             </p>
                           </div>
                         </div>
@@ -3218,6 +3264,7 @@ export default function Schedules() {
                             <div className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 h-48 overflow-y-auto space-y-1 custom-scrollbar">
                               {teachers.map(t => {
                                 const count = getTeacherExamCount(t.uid);
+                                const dayCount = getTeacherDayExamCount(t.uid, examDate);
                                 const isSelected = examInvigilators.includes(t.uid);
                                 return (
                                   <label key={t.uid} className={cn(
@@ -3235,12 +3282,19 @@ export default function Schedules() {
                                       className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
                                     />
                                     <div className="flex flex-col">
-                                      <span className={cn("text-sm font-bold", count >= 4 ? "text-red-600" : "text-slate-700")}>
+                                      <span className={cn("text-sm font-bold", (count >= 4 || dayCount > 0) ? "text-red-600" : "text-slate-700")}>
                                         {t.displayName}
                                       </span>
-                                      <span className="text-[10px] text-slate-400">
-                                        الحراسات: {count}
-                                      </span>
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-[10px] text-slate-400">
+                                          الفصل: {count}
+                                        </span>
+                                        {dayCount > 0 && (
+                                          <span className="text-[10px] text-orange-500 font-bold">
+                                            اليوم: {dayCount}
+                                          </span>
+                                        )}
+                                      </div>
                                     </div>
                                   </label>
                                 );
@@ -3335,6 +3389,7 @@ export default function Schedules() {
                                 <div className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 h-32 overflow-y-auto space-y-1 custom-scrollbar">
                                   {teachers.map(t => {
                                     const count = getTeacherExamCount(t.uid);
+                                    const dayCount = getTeacherDayExamCount(t.uid, examDate);
                                     const isSelected = ra.invigilators.includes(t.uid);
                                     return (
                                       <label key={t.uid} className={cn(
@@ -3355,12 +3410,19 @@ export default function Schedules() {
                                           className="w-3.5 h-3.5 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
                                         />
                                         <div className="flex flex-col">
-                                          <span className={cn("text-xs font-bold", count >= 4 ? "text-red-600" : "text-slate-700")}>
+                                          <span className={cn("text-xs font-bold", (count >= 4 || dayCount > 0) ? "text-red-600" : "text-slate-700")}>
                                             {t.displayName}
                                           </span>
-                                          <span className="text-[9px] text-slate-400">
-                                            الحراسات: {count}
-                                          </span>
+                                          <div className="flex items-center gap-2">
+                                            <span className="text-[9px] text-slate-400">
+                                              الفصل: {count}
+                                            </span>
+                                            {dayCount > 0 && (
+                                              <span className="text-[9px] text-orange-500 font-bold">
+                                                اليوم: {dayCount}
+                                              </span>
+                                            )}
+                                          </div>
                                         </div>
                                       </label>
                                     );
