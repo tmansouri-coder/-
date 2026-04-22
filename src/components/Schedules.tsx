@@ -193,7 +193,7 @@ export default function Schedules() {
         }));
 
         unsubscribers.push(onSnapshot(collection(db, 'specialties'), (snap) => {
-          setSpecialties(snap.docs.map(d => ({ id: d.id, ...d.data() } as Specialty)));
+          setSpecialties(snap.docs.map(d => ({ id: d.id, ...d.data() } as Specialty)).sort((a, b) => a.name.localeCompare(b.name)));
         }));
 
         unsubscribers.push(onSnapshot(collection(db, 'modules'), (snap) => {
@@ -213,7 +213,7 @@ export default function Schedules() {
               displayName: data.displayName || data.name || t('no_teacher')
             } as User;
             return [teacher.uid, teacher];
-          })).values());
+          })).values()).sort((a, b) => a.displayName.localeCompare(b.displayName));
           setTeachers(uniqueTeachers);
         }));
 
@@ -2781,7 +2781,13 @@ export default function Schedules() {
                         ? s.invigilators?.includes(selectedTeacherId || '')
                         : s.roomAssignments?.some(ra => ra.invigilators.includes(selectedTeacherId || ''));
                       return isAssigned && s.semester === selectedSemester;
-                    }).map(exam => {
+                    })
+                    .sort((a, b) => {
+                      const dateComp = (a.date || '').localeCompare(b.date || '');
+                      if (dateComp !== 0) return dateComp;
+                      return (a.time || '').localeCompare(b.time || '');
+                    })
+                    .map(exam => {
                       const module = modules.find(m => m.id === exam.moduleId);
                       const specialty = specialties.find(s => s.id === (exam.specialtyId || module?.specialtyId));
                       
