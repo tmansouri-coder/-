@@ -1,21 +1,26 @@
-import React, { useState } from 'react';
-import { signInWithPopup, GoogleAuthProvider, signInWithEmailAndPassword } from 'firebase/auth';
-import { collection, query, where, getDocs, doc, getDoc, updateDoc, setDoc } from 'firebase/firestore';
-import { auth, db } from '../lib/firebase';
-import { LogIn, Settings, ShieldCheck, Mail, Lock, User } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
+import { auth } from '../lib/firebase';
+import { useAuth } from '../contexts/AuthContext';
+import { Settings, ShieldCheck } from 'lucide-react';
 import { motion } from 'motion/react';
 
 export default function Login() {
-  const [error, setError] = useState('');
+  const { error: authError } = useAuth();
+  const [localError, setLocalError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  const error = authError || localError;
 
   const handleGoogleLogin = async () => {
     try {
       setLoading(true);
+      setLocalError('');
       const provider = new GoogleAuthProvider();
       await signInWithPopup(auth, provider);
-    } catch (err) {
-      setError('فشل تسجيل الدخول عبر جوجل');
+    } catch (err: any) {
+      if (err.code === 'auth/popup-closed-by-user') return;
+      setLocalError('فشل تسجيل الدخول عبر جوجل');
     } finally {
       setLoading(false);
     }
