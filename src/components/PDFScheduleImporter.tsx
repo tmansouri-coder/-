@@ -53,25 +53,78 @@ export default function PDFScheduleImporter({
 
   const matchEntity = (name: string, entities: any[], field: string = 'name', preferredLevelId?: string) => {
     if (!name) return null;
-    const normalizedName = name.toLowerCase().trim();
     
     // Filter entities if we have a preferred level
     let candidates = entities;
     if (preferredLevelId && (field === 'name' || field === 'title')) {
-      // For modules and specialties, we can filter by levelId
-      // Note: Module and Specialty types are passed
       const levelMatches = entities.filter(e => e.levelId === preferredLevelId);
       if (levelMatches.length > 0) {
-        // If we find candidates in the correct level, prioritize them
         candidates = levelMatches;
       }
     }
 
-    return candidates.find(e => 
-      e[field].toLowerCase().trim() === normalizedName || 
-      normalizedName.includes(e[field].toLowerCase().trim()) ||
-      e[field].toLowerCase().trim().includes(normalizedName)
-    );
+    return candidates.find(e => isFuzzyMatch(e[field], name));
+  };
+
+  const normalizeString = (str: string) => {
+    if (!str) return '';
+    return str
+      .toLowerCase()
+      .trim()
+      .replace(/[أإآ]/g, 'ا')
+      .replace(/ة/g, 'ه')
+      .replace(/ى/g, 'ي') // Normalize alif maqsura
+      // Remove common titles and prefixes
+      .replace(/الاستاذة?\s+/g, '')
+      .replace(/البروفيسور\s+/g, '')
+      .replace(/الدكتوره?\s+/g, '')
+      .replace(/^ال/g, '') // Remove prefix 'Al' if at start
+      .replace(/\s+ال/g, ' ') // Remove prefix 'Al' after space
+      .replace(/د\.\s+/g, '')
+      .replace(/أ\.\s+/g, '')
+      // Keep dots as they are used in initials
+      .replace(/[^\u0621-\u064A0-9a-z\s.]/g, ' ') 
+      .replace(/\s+/g, ' ')
+      .trim();
+  };
+
+  const isFuzzyMatch = (name1: string, name2: string) => {
+    const n1 = normalizeString(name1);
+    const n2 = normalizeString(name2);
+    
+    if (!n1 || !n2) return false;
+    if (n1 === n2 || n1.includes(n2) || n2.includes(n1)) return true;
+
+    // Handle initials pattern like "A.ALI" matching "Ahmed Ali"
+    const checkInitials = (full: string, abbrev: string) => {
+      const cleanAbbrev = abbrev.replace(/\./g, ' ').split(' ').filter(Boolean);
+      const cleanFull = full.split(' ').filter(Boolean);
+      
+      if (cleanAbbrev.length === 2 && cleanFull.length >= 2) {
+        const init = cleanAbbrev[0];
+        const last = cleanAbbrev[1];
+        
+        // Pattern: I. Lastname
+        if (init.length === 1 && cleanFull[0].startsWith(init) && cleanFull[cleanFull.length - 1] === last) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    if (checkInitials(n1, n2) || checkInitials(n2, n1)) return true;
+
+    // Check words overlap (handles reordering like "Mansouri Tarek" vs "Tarek Mansouri")
+    const words1 = n1.replace(/\./g, ' ').split(' ').filter(w => w.length >= 2);
+    const words2 = n2.replace(/\./g, ' ').split(' ').filter(w => w.length >= 2);
+    
+    if (words1.length === 0 || words2.length === 0) return false;
+    
+    // If one name is a subset of words of the other
+    const allWords1In2 = words1.every(w => words2.some(w2 => w2 === w || w2.includes(w) || w.includes(w2)));
+    const allWords2In1 = words2.every(w => words1.some(w1 => w1 === w || w1.includes(w) || w.includes(w1)));
+
+    return allWords1In2 || allWords2In1;
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -83,10 +136,11 @@ export default function PDFScheduleImporter({
 
     try {
       const text = await extractTextFromPDF(uploadedFile);
+      const pages = text.split('--- Page').filter(p => p.trim().length > 0).map(p => '--- Page' + p);
       
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
       
-      const systemInstruction = type === 'semester' 
+       const systemInstruction = type === 'semester' 
         ? `You are an expert in parsing academic university schedules from text. 
            Extract schedule sessions for mechanical engineering department.
            Return a JSON array of session objects.
@@ -94,15 +148,19 @@ export default function PDFScheduleImporter({
            The day must be one of: Sunday, Monday, Tuesday, Wednesday, Thursday.
            The period must be one of: H1, H2, H3, H4, H5, H6.
            The sessionType must be: Cours, TD, or TP.
-           ${selectedLevelName ? `Current target level is: ${selectedLevelName}.` : ''}
+           ${selectedLevelName ? `IMPORTANT: Only extract sessions for the level: ${selectedLevelName}. Ignore all other levels completely to save space.` : ''}
            Context info:
            - Days: الأحد (Sunday), الاثنين (Monday), الثلاثاء (Tuesday), الأربعاء (Wednesday), الخميس (Thursday).
            - Periods: H1 (08:10), H2 (09:40), H3 (11:10), H4 (12:35), H5 (14:10), H6 (15:40).`
         : `You are an expert in parsing academic exam schedules from text.
-           Extract exam sessions.
+           Extract exam sessions including precise invigilator names and room names.
            Return a JSON array of exam objects.
            Each exam should have: moduleName, specialtyName, levelName, date (YYYY-MM-DD), time, type (Regular, Resit), semester (S1, S2), roomNames (array), invigilatorNames (array).
-           ${selectedLevelName ? `Current target level is: ${selectedLevelName}.` : ''}`;
+           ${selectedLevelName ? `IMPORTANT: Only extract exams for the level: ${selectedLevelName}. Ignore all other levels completely to save space.` : ''}
+           Note: Look for names of teachers/invigilators. They are often listed after the module or in dedicated columns. 
+           In Arabic, look for headings like "الأساتذة الحراس" or "المراقبون". 
+           Identify the full names of the teachers correctly.
+           For levels that split exams (e.g., 2nd Year / Second Year / ثانية ليسانس), try to capture specific assignments in 'roomAssignments' if room-specific invigilators are listed.`;
 
       const responseSchema = type === 'semester' 
         ? {
@@ -136,27 +194,62 @@ export default function PDFScheduleImporter({
                 type: { type: Type.STRING },
                 semester: { type: Type.STRING },
                 roomNames: { type: Type.ARRAY, items: { type: Type.STRING } },
-                invigilatorNames: { type: Type.ARRAY, items: { type: Type.STRING } }
+                invigilatorNames: { type: Type.ARRAY, items: { type: Type.STRING } },
+                roomAssignments: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      roomName: { type: Type.STRING },
+                      invigilatorNames: { type: Type.ARRAY, items: { type: Type.STRING } },
+                      groups: { type: Type.ARRAY, items: { type: Type.STRING } }
+                    },
+                    required: ["roomName"]
+                  }
+                }
               },
               required: ["moduleName", "date", "time"]
             }
           };
 
-      const aiResponse = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: `Here is the extracted text from a ${type === 'semester' ? 'semester schedule' : 'exam schedule'} PDF. 
-                   Identify the sessions and extract them accurately.
-                   Text content:
-                   ${text}`,
-        config: {
-          systemInstruction,
-          responseMimeType: "application/json",
-          responseSchema
-        }
-      });
+      let items: any[] = [];
+      const CHUNK_SIZE = 1; // Process 1 page at a time to stay safe with output limits
+      
+      for (let i = 0; i < pages.length; i += CHUNK_SIZE) {
+        const chunkText = pages.slice(i, i + CHUNK_SIZE).join('\n\n');
+        try {
+          const aiResponse = await ai.models.generateContent({
+            model: "gemini-3.1-pro-preview", // Use Pro for higher output token limits (32k) and better reasoning
+            contents: `Here is a part of the extracted text from a ${type === 'semester' ? 'semester schedule' : 'exam schedule'} PDF. 
+                       Identify the sessions and extract them accurately into the required JSON format.
+                       Text content:
+                       ${chunkText}`,
+            config: {
+              systemInstruction,
+              responseMimeType: "application/json",
+              responseSchema
+            }
+          });
 
-      const items = JSON.parse(aiResponse.text);
-      console.log(`AI analyzed ${items.length} items. Starting matching...`);
+          if (aiResponse.text) {
+             let cleanText = aiResponse.text.trim();
+             // Remove markdown code blocks if present (though responseMimeType: 'application/json' should handle this)
+             if (cleanText.startsWith('```')) {
+               cleanText = cleanText.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
+             }
+             const chunkItems = JSON.parse(cleanText);
+             if (Array.isArray(chunkItems)) {
+               items = [...items, ...chunkItems];
+             }
+          }
+        } catch (err) {
+          console.error(`Error parsing chunk ${i}:`, err);
+          // Continue to next chunk or handle as needed
+        }
+      }
+
+      console.log(`AI analyzed total ${items.length} items from ${pages.length} pages. Starting matching...`);
+
       
       // Build lookup maps for faster matching
       const modulesMap = new Map<string, Module[]>();
@@ -203,9 +296,21 @@ export default function PDFScheduleImporter({
         const mod = fastMatch(item.moduleName, modulesMap, selectedLevelId);
         const spec = fastMatch(item.specialtyName, specialtiesMap, selectedLevelId);
         
+        // If we have a selected level, and the parsed item doesn't match a specialty in that level,
+        // it might be a 'fake' or irrelevant item from a multi-level PDF.
+        if (selectedLevelId && spec && spec.levelId !== selectedLevelId) {
+          // Keep it but mark it as suspicious if needed, or just let the filter handle it.
+        }
+
         if (type === 'semester') {
-          const teacher = teachersMap.get(item.teacherName?.toLowerCase().trim());
-          const room = roomsMap.get(item.roomName?.toLowerCase().trim());
+          const teacher = teachers.find(t => 
+            t.displayName.toLowerCase().trim() === item.teacherName?.toLowerCase().trim() ||
+            item.teacherName?.toLowerCase().trim().includes(t.displayName.toLowerCase().trim())
+          );
+          const room = rooms.find(r => 
+            r.name.toLowerCase().trim() === item.roomName?.toLowerCase().trim() ||
+            item.roomName?.toLowerCase().trim().includes(r.name.toLowerCase().trim())
+          );
           return {
             ...item,
             moduleId: mod?.id || '',
@@ -215,26 +320,53 @@ export default function PDFScheduleImporter({
             matched: !!(mod && spec)
           };
         } else {
-          const matchedRooms = (item.roomNames || [])
+          const rawRoomNames = Array.isArray(item.roomNames) ? item.roomNames : (item.roomNames ? [item.roomNames] : []);
+          const flatRoomNames = rawRoomNames.flatMap((r: string) => r.split(/[,،/\\+]+/).map(s => s.trim()).filter(Boolean));
+          
+          const matchedRooms = flatRoomNames
             .map((rn: string) => {
-              const r = roomsMap.get(rn.toLowerCase().trim());
+              const r = rooms.find(room => isFuzzyMatch(room.name, rn));
               return r?.id;
             })
             .filter(Boolean);
 
-          const matchedInvigilators = (item.invigilatorNames || [])
+          const rawInvigilatorNames = Array.isArray(item.invigilatorNames) ? item.invigilatorNames : (item.invigilatorNames ? [item.invigilatorNames] : []);
+          const flatInvigilatorNames = rawInvigilatorNames.flatMap((inm: string) => inm.split(/[,،/\\+]+/).map(s => s.trim()).filter(Boolean));
+
+          const matchedInvigilators = flatInvigilatorNames
             .map((inm: string) => {
-              const t = teachersMap.get(inm.toLowerCase().trim());
+              const t = teachers.find(teach => isFuzzyMatch(teach.displayName, inm));
               return t?.uid;
             })
             .filter(Boolean);
 
+          // Map roomAssignments if present
+          let mappedAssignments: any[] = [];
+          if (Array.isArray(item.roomAssignments)) {
+            mappedAssignments = item.roomAssignments.map((ra: any) => {
+              const r = rooms.find(room => isFuzzyMatch(room.name, ra.roomName));
+              const raInvigs = Array.isArray(ra.invigilatorNames) 
+                ? ra.invigilatorNames.map((inm: string) => teachers.find(t => isFuzzyMatch(t.displayName, inm))?.uid).filter(Boolean)
+                : [];
+              
+              return {
+                roomId: r?.id || '',
+                invigilators: raInvigs,
+                groups: ra.groups || [],
+                studentCount: 0
+              };
+            }).filter((ra: any) => ra.roomId || (ra.invigilators && ra.invigilators.length > 0));
+          }
+
           return {
             ...item,
+            invigilatorNames: flatInvigilatorNames, // Update with flattened names for UI feedback
+            roomNames: flatRoomNames,
             moduleId: mod?.id || '',
             specialtyId: spec?.id || '',
-            roomIds: matchedRooms,
-            invigilators: matchedInvigilators,
+            roomIds: [...new Set(matchedRooms)],
+            invigilators: [...new Set(matchedInvigilators)],
+            roomAssignments: mappedAssignments,
             matched: !!(mod && spec)
           };
         }
@@ -255,6 +387,7 @@ export default function PDFScheduleImporter({
     setLoading(true);
     const collectionName = type === 'semester' ? 'scheduleSessions' : 'examSessions';
     const validItems = parsedData.filter(item => item.moduleId && item.specialtyId);
+    const normalizedAcademicYear = academicYear.replace('-', '/');
     
     try {
       let count = 0;
@@ -266,6 +399,30 @@ export default function PDFScheduleImporter({
         
         for (const item of chunk) {
           const newDocRef = doc(collection(db, collectionName));
+          
+          const hasDetailedAssignments = Array.isArray(item.roomAssignments) && item.roomAssignments.length > 0;
+          // Use detailed mode if assignments exist, regardless of level
+          const mode = hasDetailedAssignments ? 'Detailed' : 'Simple';
+
+          // Extract unique roomIds and invigilators from assignments if empty in simple fields
+          let finalRoomIds = [...(item.roomIds || [])];
+          let finalInvigilators = [...(item.invigilators || [])];
+
+          if (hasDetailedAssignments) {
+            item.roomAssignments.forEach((ra: any) => {
+              if (ra.roomId && !finalRoomIds.includes(ra.roomId)) {
+                finalRoomIds.push(ra.roomId);
+              }
+              if (Array.isArray(ra.invigilators)) {
+                ra.invigilators.forEach((vid: string) => {
+                  if (vid && !finalInvigilators.includes(vid)) {
+                    finalInvigilators.push(vid);
+                  }
+                });
+              }
+            });
+          }
+
           const data = type === 'semester' ? {
             moduleId: item.moduleId,
             teacherId: item.teacherId || '',
@@ -275,7 +432,7 @@ export default function PDFScheduleImporter({
             day: item.day,
             period: item.period,
             type: item.sessionType,
-            academicYear
+            academicYear: normalizedAcademicYear
           } : {
             moduleId: item.moduleId,
             specialtyId: item.specialtyId,
@@ -283,10 +440,11 @@ export default function PDFScheduleImporter({
             date: item.date,
             time: item.time,
             type: item.type || 'Regular',
-            roomIds: item.roomIds || [],
-            invigilators: item.invigilators || [],
-            mode: 'Simple',
-            academicYear
+            roomIds: finalRoomIds,
+            invigilators: finalInvigilators,
+            roomAssignments: mode === 'Detailed' ? item.roomAssignments : [],
+            mode,
+            academicYear: normalizedAcademicYear
           };
           
           batch.set(newDocRef, data);
@@ -414,7 +572,49 @@ export default function PDFScheduleImporter({
                       <tr key={i} className="hover:bg-slate-50 transition-all">
                         <td className="px-4 py-3">
                           <p className="font-bold text-slate-900 text-sm">{item.moduleName}</p>
-                          {!item.moduleId && <span className="text-[10px] text-red-500 font-bold uppercase">لم يتم التعرف على المعرف</span>}
+                          {!item.moduleId && <span className="text-[10px] text-red-500 font-bold uppercase">لم يتم التعرف على المقياس</span>}
+                          
+                          {type === 'exams' && (
+                            <div className="mt-1 space-y-1">
+                              {item.roomAssignments && item.roomAssignments.length > 0 ? (
+                                <div className="flex flex-col gap-1">
+                                  <span className="text-[9px] font-bold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded-full w-fit">توزيع تفصيلي ({item.roomAssignments.length} قاعات)</span>
+                                  <div className="space-y-0.5">
+                                    {item.roomAssignments.slice(0, 3).map((ra: any, idx: number) => (
+                                      <div key={idx} className="flex items-center gap-1.5 text-[10px] text-slate-500">
+                                        <span className="font-bold text-slate-700">{ra.roomName || '؟'}:</span>
+                                        <span className="truncate max-w-[200px]">
+                                          {Array.isArray(ra.invigilatorNames) ? ra.invigilatorNames.join('، ') : '---'}
+                                        </span>
+                                      </div>
+                                    ))}
+                                    {item.roomAssignments.length > 3 && (
+                                      <p className="text-[9px] text-slate-400 italic">...و {item.roomAssignments.length - 3} قاعات أخرى</p>
+                                    )}
+                                  </div>
+                                </div>
+                              ) : (
+                                item.invigilatorNames && item.invigilatorNames.length > 0 && (
+                                  <div className="flex flex-wrap gap-1">
+                                    {item.invigilatorNames.map((name: string, idx: number) => {
+                                      const isMatched = item.invigilators?.some((id: string) => {
+                                        const t = teachers.find(teach => teach.uid === id);
+                                        return t && isFuzzyMatch(t.displayName, name);
+                                      });
+                                      return (
+                                        <span key={idx} className={cn(
+                                          "text-[9px] px-1 rounded border",
+                                          isMatched ? "bg-emerald-50 border-emerald-100 text-emerald-600" : "bg-red-50 border-red-100 text-red-600"
+                                        )}>
+                                          {name}
+                                        </span>
+                                      );
+                                    })}
+                                  </div>
+                                )
+                              )}
+                            </div>
+                          )}
                         </td>
                         <td className="px-4 py-3">
                           <p className="text-slate-600 text-sm">{item.specialtyName}</p>

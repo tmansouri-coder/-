@@ -74,15 +74,23 @@ export default function Schedules() {
   const [examSessions, setExamSessions] = useState<ExamSession[]>([]);
 
   // Filters
-  const [selectedCycle, setSelectedCycle] = useState<string>('');
-  const [selectedLevel, setSelectedLevel] = useState<string>('');
-  const [selectedSpecialty, setSelectedSpecialty] = useState<string>('');
-  const [selectedSemester, setSelectedSemester] = useState<'S1' | 'S2'>('S1');
-  const [selectedRoom, setSelectedRoom] = useState<string>('');
+  const [selectedCycle, setSelectedCycle] = useState<string>(() => localStorage.getItem('selectedCycle') || '');
+  const [selectedLevel, setSelectedLevel] = useState<string>(() => localStorage.getItem('selectedLevel') || '');
+  const [selectedSpecialty, setSelectedSpecialty] = useState<string>(() => localStorage.getItem('selectedSpecialty') || '');
+  const [selectedSemester, setSelectedSemester] = useState<'S1' | 'S2'>(() => (localStorage.getItem('selectedSemester') as 'S1' | 'S2') || 'S1');
+  const [selectedRoom, setSelectedRoom] = useState<string>(() => localStorage.getItem('selectedRoom') || '');
   const [selectedExamType, setSelectedExamType] = useState<'Regular' | 'Resit' | 'All'>('All');
   const [examStartDate, setExamStartDate] = useState<string>('');
   const [examEndDate, setExamEndDate] = useState<string>('');
   const [selectedTeacherId, setSelectedTeacherId] = useState<string>(user?.uid || '');
+
+  useEffect(() => {
+    localStorage.setItem('selectedCycle', selectedCycle);
+    localStorage.setItem('selectedLevel', selectedLevel);
+    localStorage.setItem('selectedSpecialty', selectedSpecialty);
+    localStorage.setItem('selectedSemester', selectedSemester);
+    localStorage.setItem('selectedRoom', selectedRoom);
+  }, [selectedCycle, selectedLevel, selectedSpecialty, selectedSemester, selectedRoom]);
 
   useEffect(() => {
     if (user && !selectedTeacherId) {
@@ -110,7 +118,7 @@ export default function Schedules() {
     if (editingSession) {
       setIsExternal(editingSession.isExternal || false);
       setIsReserved(editingSession.isReserved || false);
-      const mod = modules.find(m => m.id === editingSession.moduleId);
+      const mod = resolveModule(editingSession.moduleId);
       setIsST(mod?.isST || false);
     } else {
       setIsST(false);
@@ -124,6 +132,7 @@ export default function Schedules() {
   const [examRooms, setExamRooms] = useState<string[]>([]);
   const [examInvigilators, setExamInvigilators] = useState<string[]>([]);
   const [applyTimeToLevel, setApplyTimeToLevel] = useState(false);
+  const [applyRoomsToSpecialty, setApplyRoomsToSpecialty] = useState(false);
   const [levelExtraExamDates, setLevelExtraExamDates] = useState<Record<string, string[]>>({});
   const [promptConfig, setPromptConfig] = useState<{
     show: boolean;
@@ -182,26 +191,38 @@ export default function Schedules() {
         const yearQueries = [selectedYear];
         if (alternateYear !== selectedYear) yearQueries.push(alternateYear);
 
-        // Core Entities (Real-time)
+        // Core Entities (Real-time) - Track loaded status
+        let loadedCount = 0;
+        const totalCore = 6; // cycles, levels, specialties, modules, rooms, users
+        const checkDone = () => {
+          loadedCount++;
+          if (loadedCount >= totalCore) setLoading(false);
+        };
+
         unsubscribers.push(onSnapshot(collection(db, 'cycles'), (snap) => {
           setCycles(snap.docs.map(d => ({ id: d.id, ...d.data() } as Cycle)));
+          checkDone();
         }));
 
         unsubscribers.push(onSnapshot(collection(db, 'levels'), (snap) => {
           const levelDocs = snap.docs.map(d => ({ id: d.id, ...d.data() } as Level));
           setLevels(levelDocs.map(l => ({ ...l, name: mapLevelName(l.name) })));
+          checkDone();
         }));
 
         unsubscribers.push(onSnapshot(collection(db, 'specialties'), (snap) => {
           setSpecialties(snap.docs.map(d => ({ id: d.id, ...d.data() } as Specialty)).sort((a, b) => a.name.localeCompare(b.name)));
+          checkDone();
         }));
 
         unsubscribers.push(onSnapshot(collection(db, 'modules'), (snap) => {
           setModules(snap.docs.map(d => ({ id: d.id, ...d.data() } as Module)));
+          checkDone();
         }));
 
         unsubscribers.push(onSnapshot(collection(db, 'rooms'), (snap) => {
           setRooms(snap.docs.map(d => ({ id: d.id, ...d.data() } as Room)));
+          checkDone();
         }));
 
         unsubscribers.push(onSnapshot(query(collection(db, 'users'), where('role', 'in', ['admin', 'vice_admin', 'teacher', 'specialty_manager'])), (snap) => {
@@ -215,6 +236,7 @@ export default function Schedules() {
             return [teacher.uid, teacher];
           })).values()).sort((a, b) => a.displayName.localeCompare(b.displayName));
           setTeachers(uniqueTeachers);
+          checkDone();
         }));
 
         unsubscribers.push(onSnapshot(doc(db, 'settings', 'examDates'), (snap) => {
@@ -226,17 +248,24 @@ export default function Schedules() {
         // Real-time synchronization for sessions
         const schedQuery = query(collection(db, 'scheduleSessions'), where('academicYear', 'in', yearQueries));
         unsubscribers.push(onSnapshot(schedQuery, (snap) => {
-          const docs = snap.docs.map(d => ({ id: d.id, ...d.data(), academicYear: selectedYear } as ScheduleSession));
+          const docs = snap.docs.map(d => ({ 
+            id: d.id, 
+            ...d.data(), 
+            academicYear: (d.data() as any).academicYear?.replace('-', '/') || selectedYear 
+          } as ScheduleSession));
           setScheduleSessions(docs);
         }));
 
         const examQuery = query(collection(db, 'examSessions'), where('academicYear', 'in', yearQueries));
         unsubscribers.push(onSnapshot(examQuery, (snap) => {
-          const docs = snap.docs.map(d => ({ id: d.id, ...d.data(), academicYear: selectedYear } as ExamSession));
+          const docs = snap.docs.map(d => ({ 
+            id: d.id, 
+            ...d.data(), 
+            academicYear: (d.data() as any).academicYear?.replace('-', '/') || selectedYear 
+          } as ExamSession));
           setExamSessions(docs);
         }));
 
-        setLoading(false);
       } catch (err) {
         console.error('Fetch error:', err);
         setLoading(false);
@@ -247,66 +276,149 @@ export default function Schedules() {
     return () => unsubscribers.forEach(unsub => unsub());
   }, [selectedYear]);
 
-  // Auto-healer for legacy name-based teacher IDs
+  // Auto-select defaults for improved UX on new/cleared machines
   useEffect(() => {
-    if ((isAdmin || isViceAdmin) && !loading && teachers.length > 0) {
+    if (loading) return;
+    
+    // 1. Auto-select Cycle
+    if (cycles.length > 0 && !selectedCycle) {
+      const stored = localStorage.getItem('selectedCycle');
+      if (stored && cycles.some(c => c.id === stored)) {
+        setSelectedCycle(stored);
+      } else {
+        setSelectedCycle(cycles[0].id);
+      }
+    }
+
+    // 2. Auto-select Level
+    if (selectedCycle && levels.length > 0 && !selectedLevel) {
+      const stored = localStorage.getItem('selectedLevel');
+      if (stored && levels.some(l => l.id === stored && l.cycleId === selectedCycle)) {
+        setSelectedLevel(stored);
+      } else {
+        const firstLevel = levels.find(l => l.cycleId === selectedCycle);
+        if (firstLevel) setSelectedLevel(firstLevel.id);
+      }
+    }
+  }, [cycles, levels, selectedCycle, selectedLevel, loading]);
+
+  // Auto-healer for legacy name-based IDs
+  useEffect(() => {
+    if ((isAdmin || isViceAdmin) && !loading && teachers.length > 0 && modules.length > 0 && rooms.length > 0) {
       const healData = async () => {
         let healedCount = 0;
         const batch = writeBatch(db);
         
         // Fix scheduleSessions
         scheduleSessions.forEach(s => {
+          let updated = false;
+          const updates: any = {};
+
           if (s.teacherId && !teachers.some(t => t.uid === s.teacherId)) {
             const matched = teachers.find(t => t.displayName.toLowerCase().trim() === s.teacherId.toLowerCase().trim());
-            if (matched) {
-              batch.update(doc(db, 'scheduleSessions', s.id), { teacherId: matched.uid });
-              healedCount++;
-            }
+            if (matched) { updates.teacherId = matched.uid; updated = true; }
+          }
+          if (s.moduleId && !modules.some(m => m.id === s.moduleId)) {
+            const matched = modules.find(m => m.name.toLowerCase().trim() === s.moduleId.toLowerCase().trim());
+            if (matched) { updates.moduleId = matched.id; updated = true; }
+          }
+          if (s.roomId && !rooms.some(r => r.id === s.roomId)) {
+            const matched = rooms.find(r => r.name.toLowerCase().trim() === s.roomId.toLowerCase().trim());
+            if (matched) { updates.roomId = matched.id; updated = true; }
+          }
+          if (s.specialtyId && !specialties.some(sp => sp.id === s.specialtyId)) {
+            const matched = specialties.find(sp => sp.name.toLowerCase().trim() === s.specialtyId.toLowerCase().trim());
+            if (matched) { updates.specialtyId = matched.id; updated = true; }
+          }
+
+          // Action: Normalize Academic Year
+          const normalizedYear = s.academicYear?.replace('-', '/');
+          if (normalizedYear && normalizedYear !== s.academicYear) {
+            updates.academicYear = normalizedYear;
+            updated = true;
+          }
+
+          if (updated) {
+            batch.update(doc(db, 'scheduleSessions', s.id), updates);
+            healedCount++;
           }
         });
 
         // Fix examSessions
         examSessions.forEach(s => {
           let updated = false;
-          const newInvigs = s.invigilators?.map(id => {
-            if (id && !teachers.some(t => t.uid === id)) {
-              const matched = teachers.find(t => t.displayName.toLowerCase().trim() === id.toLowerCase().trim());
-              if (matched) {
-                updated = true;
-                return matched.uid;
-              }
-            }
-            return id;
-          });
+          const updates: any = {};
 
-          if (updated) {
-            batch.update(doc(db, 'examSessions', s.id), { invigilators: newInvigs });
-            healedCount++;
+          const normalizedYear = s.academicYear?.replace('-', '/');
+          if (normalizedYear && normalizedYear !== s.academicYear) {
+            updates.academicYear = normalizedYear;
+            updated = true;
           }
-          
-          // Fix roomAssignments
-          let raUpdated = false;
-          const newRA = s.roomAssignments?.map(ra => {
+
+          // Teacher IDs (Invigilators)
+          if (s.invigilators) {
             let invigsUpdated = false;
-            const newRaInvigs = ra.invigilators?.map(id => {
+            const newInvigs = s.invigilators.map(id => {
               if (id && !teachers.some(t => t.uid === id)) {
                 const matched = teachers.find(t => t.displayName.toLowerCase().trim() === id.toLowerCase().trim());
-                if (matched) {
-                  invigsUpdated = true;
-                  return matched.uid;
-                }
+                if (matched) { invigsUpdated = true; return matched.uid; }
               }
               return id;
             });
-            if (invigsUpdated) {
-              raUpdated = true;
-              return { ...ra, invigilators: newRaInvigs };
-            }
-            return ra;
-          });
+            if (invigsUpdated) { updates.invigilators = newInvigs; updated = true; }
+          }
 
-          if (raUpdated) {
-            batch.update(doc(db, 'examSessions', s.id), { roomAssignments: newRA });
+          // Module ID
+          if (s.moduleId && !modules.some(m => m.id === s.moduleId)) {
+            const matched = modules.find(m => m.name.toLowerCase().trim() === s.moduleId.toLowerCase().trim());
+            if (matched) { updates.moduleId = matched.id; updated = true; }
+          }
+
+          // Room IDs (Simple mode)
+          if (s.roomIds) {
+            let roomsUpdated = false;
+            const newRoomIds = s.roomIds.map(id => {
+              if (id && !rooms.some(r => r.id === id)) {
+                const matched = rooms.find(r => r.name.toLowerCase().trim() === id.toLowerCase().trim());
+                if (matched) { roomsUpdated = true; return matched.id; }
+              }
+              return id;
+            });
+            if (roomsUpdated) { updates.roomIds = newRoomIds; updated = true; }
+          }
+
+          // Room Assignments (Detailed mode)
+          if (s.roomAssignments) {
+            let raUpdated = false;
+            const newRA = s.roomAssignments.map(ra => {
+              let changed = false;
+              const newRaUpdates: any = { ...ra };
+
+              if (ra.roomId && !rooms.some(r => r.id === ra.roomId)) {
+                const matched = rooms.find(r => r.name.toLowerCase().trim() === ra.roomId.toLowerCase().trim());
+                if (matched) { newRaUpdates.roomId = matched.id; changed = true; }
+              }
+
+              if (ra.invigilators) {
+                let invigsUpdated = false;
+                const newRaInvigs = ra.invigilators.map(id => {
+                  if (id && !teachers.some(t => t.uid === id)) {
+                    const matched = teachers.find(t => t.displayName.toLowerCase().trim() === id.toLowerCase().trim());
+                    if (matched) { invigsUpdated = true; return matched.uid; }
+                  }
+                  return id;
+                });
+                if (invigsUpdated) { newRaUpdates.invigilators = newRaInvigs; changed = true; }
+              }
+
+              if (changed) { raUpdated = true; return newRaUpdates; }
+              return ra;
+            });
+            if (raUpdated) { updates.roomAssignments = newRA; updated = true; }
+          }
+
+          if (updated) {
+            batch.update(doc(db, 'examSessions', s.id), updates);
             healedCount++;
           }
         });
@@ -314,17 +426,17 @@ export default function Schedules() {
         if (healedCount > 0) {
           try {
             await batch.commit();
-            console.log(`Auto-healed ${healedCount} teacher bonds.`);
+            console.log(`Auto-healed ${healedCount} resource bonds.`);
           } catch (err) {
             console.error('Auto-heal failed:', err);
           }
         }
       };
       
-      const timeoutId = setTimeout(healData, 5000); // Wait 5s for everything to stabilize
+      const timeoutId = setTimeout(healData, 5000); 
       return () => clearTimeout(timeoutId);
     }
-  }, [isAdmin, isViceAdmin, loading, teachers.length]);
+  }, [isAdmin, isViceAdmin, loading, teachers.length, modules.length, rooms.length]);
 
   const resolveTeacher = (id: string | undefined | null) => {
     if (!id) return null;
@@ -333,7 +445,41 @@ export default function Schedules() {
       t.uid === id || 
       t.email?.toLowerCase().trim() === cleanId || 
       t.username?.toLowerCase().trim() === cleanId || 
-      t.displayName?.toLowerCase().trim() === cleanId
+      t.displayName?.toLowerCase().trim() === cleanId ||
+      cleanId.includes(t.displayName?.toLowerCase().trim()) ||
+      t.displayName?.toLowerCase().trim().includes(cleanId) ||
+      (t.displayName && cleanId.length >= 5 && t.displayName.toLowerCase().includes(cleanId))
+    );
+  };
+
+  const resolveModule = (id: string | undefined | null) => {
+    if (!id) return null;
+    const cleanId = id.toLowerCase().trim();
+    return modules.find(m => 
+      m.id === id || 
+      m.name.toLowerCase().trim() === cleanId ||
+      cleanId.includes(m.name.toLowerCase().trim()) ||
+      m.name.toLowerCase().trim().includes(cleanId)
+    );
+  };
+
+  const resolveRoom = (id: string | undefined | null) => {
+    if (!id) return null;
+    const cleanId = id.toLowerCase().trim();
+    return rooms.find(r => 
+      r.id === id || 
+      r.name.toLowerCase().trim() === cleanId ||
+      cleanId.includes(r.name.toLowerCase().trim()) ||
+      r.name.toLowerCase().trim().includes(cleanId)
+    );
+  };
+
+  const resolveSpecialty = (id: string | undefined | null) => {
+    if (!id) return null;
+    const cleanId = id.toLowerCase().trim();
+    return specialties.find(s => 
+      s.id === id || 
+      s.name.toLowerCase().trim() === cleanId
     );
   };
 
@@ -352,6 +498,12 @@ export default function Schedules() {
     return examSessions.filter(s => {
       if (s.academicYear !== selectedYear) return false;
       if (s.semester !== selectedSemester) return false;
+      
+      // Only count if module and specialty are still valid (not orphaned)
+      const mod = resolveModule(s.moduleId);
+      const spec = resolveSpecialty(s.specialtyId);
+      if (!mod || !spec) return false;
+
       if (s.mode === 'Simple') return s.invigilators?.includes(teacherId);
       return s.roomAssignments?.some(ra => ra.invigilators.includes(teacherId));
     }).length;
@@ -362,6 +514,12 @@ export default function Schedules() {
     return examSessions.filter(s => {
       if (s.academicYear !== selectedYear) return false;
       if (s.date !== date) return false;
+      
+      // Only count if module and specialty are still valid (not orphaned)
+      const mod = resolveModule(s.moduleId);
+      const spec = resolveSpecialty(s.specialtyId);
+      if (!mod || !spec) return false;
+
       if (s.mode === 'Simple') return s.invigilators?.includes(teacherId);
       return s.roomAssignments?.some(ra => ra.invigilators.includes(teacherId));
     }).length;
@@ -370,13 +528,13 @@ export default function Schedules() {
   const getConflict = (exam: Partial<ExamSession>) => {
     if (!exam.date || !exam.time) return null;
     
-    const examSpec = specialties.find(s => s.id === exam.specialtyId);
+    const examSpec = resolveSpecialty(exam.specialtyId);
     for (const other of examSessions) {
       if (other.id === exam.id) continue;
       if (other.date !== exam.date || other.time !== exam.time) continue;
       
       // Specialty/Level conflict
-      const otherSpec = specialties.find(s => s.id === other.specialtyId);
+      const otherSpec = resolveSpecialty(other.specialtyId);
       if (other.specialtyId === exam.specialtyId && otherSpec?.levelId === examSpec?.levelId) {
         return { type: 'تخصص', name: otherSpec?.name || '' };
       }
@@ -387,7 +545,7 @@ export default function Schedules() {
         const rooms2 = other.mode === 'Simple' ? (other.roomIds || []) : other.roomAssignments?.map(ra => ra.roomId) || [];
         const conflictingRoomId = rooms1.find(r => r && rooms2.includes(r));
         if (conflictingRoomId) {
-          const room = rooms.find(r => r.id === conflictingRoomId);
+          const room = resolveRoom(conflictingRoomId);
           return { type: 'قاعة', name: room?.name || '' };
         }
       }
@@ -450,7 +608,7 @@ export default function Schedules() {
         
         setExamSessions(prev => prev.map(s => {
           const isMatch = (scope === 'all') || 
-                         (scope === 'level' && specialties.find(spec => spec.id === s.specialtyId)?.levelId === targetLevelId) ||
+                         (scope === 'level' && resolveSpecialty(s.specialtyId)?.levelId === targetLevelId) ||
                          (s.specialtyId === specId);
           
           return (isMatch && s.semester === selectedSemester && s.academicYear === selectedYear) 
@@ -470,6 +628,63 @@ export default function Schedules() {
       toast.error('فشل تحديث التوقيت');
     }
   };
+
+  const handleUpdateRoomsForSpecialty = async (
+    specId: string, 
+    rooms: string[], 
+    mode: 'Simple' | 'Detailed', 
+    assignments: RoomAssignment[] = [],
+    scope: 'specialty' | 'level' = 'specialty'
+  ) => {
+    if (!isAdmin && !isViceAdmin) return;
+    
+    const targetSpec = specialties.find(s => s.id === specId);
+    const targetLevelId = targetSpec?.levelId;
+
+    const examsToUpdate = examSessions.filter(s => {
+      if (s.semester !== selectedSemester || s.academicYear !== selectedYear) return false;
+      if (scope === 'level') {
+        const sSpec = specialties.find(spec => spec.id === s.specialtyId);
+        return sSpec?.levelId === targetLevelId;
+      }
+      return s.specialtyId === specId;
+    });
+
+    try {
+      if (examsToUpdate.length > 0) {
+        const batch = examsToUpdate.map(async (exam) => {
+          const examRef = doc(db, 'examSessions', exam.id);
+          const updateData: any = { mode };
+          if (mode === 'Simple') {
+             updateData.roomIds = rooms;
+          } else {
+             updateData.roomAssignments = assignments;
+          }
+          await updateDoc(examRef, updateData);
+        });
+        await Promise.all(batch);
+        
+        setExamSessions(prev => prev.map(s => {
+          const isMatch = (scope === 'level' && resolveSpecialty(s.specialtyId)?.levelId === targetLevelId) || (s.specialtyId === specId);
+          if (isMatch && s.semester === selectedSemester && s.academicYear === selectedYear) {
+            const updated = { ...s, mode };
+            if (mode === 'Simple') {
+              updated.roomIds = rooms;
+            } else {
+              updated.roomAssignments = assignments;
+            }
+            return updated as ExamSession;
+          }
+          return s;
+        }));
+        
+        toast.success(scope === 'level' ? 'تم تعميم القاعات على جميع تخصصات المستوى' : 'تم تعميم القاعات على جميع امتحانات التخصص');
+      }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, 'examSessions_rooms');
+    }
+  };
+
 
   const filteredLevels = useMemo(() => 
     levels.filter(l => l.cycleId === selectedCycle),
@@ -556,7 +771,7 @@ export default function Schedules() {
     const session = getSessionAt(day, period);
     if (!session) return 1;
 
-    const module = modules.find(m => m.id === session.moduleId);
+    const module = resolveModule(session.moduleId);
     const isL2 = levels.find(l => l.id === selectedLevel)?.name.includes('Second Year');
     const isST = module?.isST;
 
@@ -565,7 +780,7 @@ export default function Schedules() {
     if (prevPeriodIdx >= 0) {
       const prevSession = getSessionAt(day, PERIODS[prevPeriodIdx]);
       if (prevSession) {
-        const prevModule = modules.find(m => m.id === prevSession.moduleId);
+        const prevModule = resolveModule(prevSession.moduleId);
         const prevIsST = prevModule?.isST;
 
         const isSameModule = (isL2 && isST && prevIsST) || 
@@ -588,7 +803,7 @@ export default function Schedules() {
     while (nextPeriodIdx < PERIODS.length) {
       const nextSession = getSessionAt(day, PERIODS[nextPeriodIdx]);
       if (nextSession) {
-        const nextModule = modules.find(m => m.id === nextSession.moduleId);
+        const nextModule = resolveModule(nextSession.moduleId);
         const nextIsST = nextModule?.isST;
 
         const isSameModule = (isL2 && isST && nextIsST) || 
@@ -618,13 +833,13 @@ export default function Schedules() {
       if (other.day !== session.day || other.period !== session.period || other.semester !== session.semester) return false;
 
       // Room Conflict (unless same module)
-      if (other.roomId === session.roomId && other.moduleId !== session.moduleId) return true;
+      if (resolveRoom(other.roomId)?.id === resolveRoom(session.roomId)?.id && resolveModule(other.moduleId)?.id !== resolveModule(session.moduleId)?.id) return true;
 
       // Teacher Conflict
-      if (other.teacherId === session.teacherId) return true;
+      if (resolveTeacher(other.teacherId)?.uid === resolveTeacher(session.teacherId)?.uid) return true;
 
       // Specialty Conflict
-      if (other.specialtyId === session.specialtyId) return true;
+      if (resolveSpecialty(other.specialtyId)?.id === resolveSpecialty(session.specialtyId)?.id) return true;
 
       return false;
     });
@@ -691,32 +906,6 @@ export default function Schedules() {
             }
           }
         });
-      }
-    });
-  };
-
-  const handleDeleteAllExams = async () => {
-    setConfirmState({
-      show: true,
-      title: 'حذف جميع الامتحانات',
-      message: `هل أنت متأكد من حذف جميع امتحانات السنة ${selectedYear} السداسي ${selectedSemester === 'S1' ? 'الأول' : 'الثاني'}؟`,
-      type: 'danger',
-      onConfirm: async () => {
-        setConfirmState(prev => ({ ...prev, show: false }));
-        const toastId = toast.loading('جاري المسح...');
-        try {
-          const examsToDelete = examSessions.filter(s => s.semester === selectedSemester);
-          
-          for (const exam of examsToDelete) {
-            await deleteDoc(doc(db, 'examSessions', exam.id));
-          }
-
-          setExamSessions(prev => prev.filter(e => e.semester !== selectedSemester));
-          toast.success('تم حذف جميع الامتحانات المختارة بنجاح', { id: toastId });
-        } catch (err) {
-          console.error('Delete failed:', err);
-          toast.error('فشل حذف الامتحانات', { id: toastId });
-        }
       }
     });
   };
@@ -969,10 +1158,10 @@ export default function Schedules() {
 
   const exportPDF = () => {
     const doc = new jsPDF('l', 'mm', 'a4');
-    const specialty = specialties.find(s => s.id === selectedSpecialty);
+    const specialty = resolveSpecialty(selectedSpecialty);
     const level = levels.find(l => l.id === selectedLevel);
     const cycle = cycles.find(c => c.id === selectedCycle);
-
+    
     // Header (Always English)
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(16);
@@ -995,9 +1184,9 @@ export default function Schedules() {
         const session = getSessionAt(day, period);
 
         if (session) {
-          const module = modules.find(m => m.id === session.moduleId);
+          const module = resolveModule(session.moduleId);
           const teacher = resolveTeacher(session.teacherId);
-          const room = rooms.find(r => r.id === session.roomId);
+          const room = resolveRoom(session.roomId);
           
           row.push({
             content: '',
@@ -1183,10 +1372,10 @@ export default function Schedules() {
         const sessions = filteredExams.filter(s => s.date === date && s.specialtyId === spec.id);
         if (sessions.length > 0) {
           row.push(sessions.map(s => {
-            const module = modules.find(m => m.id === s.moduleId);
+            const module = resolveModule(s.moduleId);
             if (s.mode === 'Detailed') {
               const assignments = s.roomAssignments?.map(ra => {
-                const room = rooms.find(r => r.id === ra.roomId);
+                const room = resolveRoom(ra.roomId);
                 const invigs = includeInvigilators ? ra.invigilators.map(id => {
                   const t = resolveTeacher(id);
                   return formatTeacherName(t?.displayName || id);
@@ -1205,7 +1394,7 @@ export default function Schedules() {
                 mode: 'Detailed'
               };
             } else {
-              const roomNames = s.roomIds?.map((id: string) => rooms.find(r => r.id === id)?.name).filter(Boolean).join(' + ') || '';
+              const roomNames = s.roomIds?.map((id: string) => resolveRoom(id)?.name).filter(Boolean).join(' + ') || '';
               const invigs = includeInvigilators ? s.invigilators?.map((id: string) => {
                 const t = resolveTeacher(id);
                 return formatTeacherName(t?.displayName || id);
@@ -1584,6 +1773,101 @@ export default function Schedules() {
     }
   };
 
+  const handleDeleteAllExams = async () => {
+    if (!isAdmin && !isViceAdmin) return;
+    
+    setConfirmState({
+      show: true,
+      title: 'حذف جميع الامتحانات',
+      message: 'هل أنت متأكد من حذف جميع امتحانات هذا المستوى للسداسي الحالي؟ هذا الإجراء لا يمكن التراجع عنه.',
+      type: 'danger',
+      onConfirm: async () => {
+        setConfirmState(prev => ({ ...prev, show: false }));
+        const toastId = toast.loading('جاري حذف الامتحانات...');
+        
+        try {
+          // Identify specialty IDs for the currently selected level or all if desired
+          // However, to be safe and specific, we target the selected level
+          const levelSpecsIds = specialties.filter(s => s.levelId === selectedLevel).map(s => s.id);
+          const examsToDelete = examSessions.filter(s => 
+            levelSpecsIds.includes(s.specialtyId) && 
+            s.semester === selectedSemester
+          );
+
+          if (examsToDelete.length === 0) {
+            toast.success('لا توجد امتحانات للحذف في هذا المستوى', { id: toastId });
+            return;
+          }
+
+          const batchSize = 500;
+          for (let i = 0; i < examsToDelete.length; i += batchSize) {
+            const batch = writeBatch(db);
+            const chunk = examsToDelete.slice(i, i + batchSize);
+            chunk.forEach(exam => {
+              batch.delete(doc(db, 'examSessions', exam.id));
+            });
+            await batch.commit();
+          }
+
+          setExamSessions(prev => prev.filter(e => !examsToDelete.some(ed => ed.id === e.id)));
+          toast.success(`تم حذف ${examsToDelete.length} امتحان بنجاح`, { id: toastId });
+        } catch (err) {
+          console.error('Delete all exams failed:', err);
+          toast.error('فشل حذف الامتحانات', { id: toastId });
+        }
+      }
+    });
+  };
+
+  const handleDeleteFakeExams = async () => {
+    if (!isAdmin && !isViceAdmin) return;
+    
+    // Identify "fake" exams: missing core ids or academic year is malformed
+    const fakeExams = examSessions.filter(exam => {
+      const module = resolveModule(exam.moduleId);
+      const spec = resolveSpecialty(exam.specialtyId);
+      // Data is "fake" / corrupted if:
+      // - No module found for the ID
+      // - No specialty found for the ID
+      // - Academic year is missing or looks like placeholder
+      return !module || !spec || !exam.academicYear || exam.academicYear.includes('Undefined') || exam.academicYear.length < 4;
+    });
+
+    if (fakeExams.length === 0) {
+      toast.success('لم يتم العثور على حراسات وهمية (البيانات جميعها سليمة)');
+      return;
+    }
+
+    setConfirmState({
+      show: true,
+      title: 'حذف الحراسات الوهمية',
+      message: `تم العثور على ${fakeExams.length} حراسة وهمية (بيانات ناقصة أو غير مرتبطة أو قديمة). هل تريد حذفها لتنظيف الجدول؟`,
+      type: 'warning',
+      onConfirm: async () => {
+        setConfirmState(prev => ({ ...prev, show: false }));
+        const toastId = toast.loading('جاري تنظيف البيانات من الحراسات الوهمية...');
+        
+        try {
+          const batchSize = 500;
+          for (let i = 0; i < fakeExams.length; i += batchSize) {
+            const batch = writeBatch(db);
+            const chunk = fakeExams.slice(i, i + batchSize);
+            chunk.forEach(exam => {
+              batch.delete(doc(db, 'examSessions', exam.id));
+            });
+            await batch.commit();
+          }
+
+          setExamSessions(prev => prev.filter(e => !fakeExams.some(fe => fe.id === e.id)));
+          toast.success(`تم تنظيف ${fakeExams.length} حراسة وهمية بنجاح`, { id: toastId });
+        } catch (err) {
+          console.error('Clean fake exams failed:', err);
+          toast.error('فشل تنظيف البيانات', { id: toastId });
+        }
+      }
+    });
+  };
+
   const handleAddExam = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!isAdmin && !isViceAdmin) return;
@@ -1647,6 +1931,14 @@ export default function Schedules() {
       if (applyTimeToLevel && examTime) {
         await handleUpdateTimeForSpecialty(examSpecialty, examTime, 'level', examSessions);
       }
+
+      if (applyRoomsToSpecialty) {
+        const roomsToApply = examMode === 'Simple' ? examRooms : [];
+        const assignmentsToApply = examMode === 'Detailed' ? roomAssignments : [];
+        await handleUpdateRoomsForSpecialty(examSpecialty, roomsToApply, examMode, assignmentsToApply, 'specialty');
+      }
+      setApplyRoomsToSpecialty(false);
+
       toast.success(editingExam ? 'تم تحديث الامتحان بنجاح' : 'تم إضافة الامتحان بنجاح');
     } catch (err) {
       handleFirestoreError(err, editingExam ? OperationType.UPDATE : OperationType.CREATE, 'examSessions');
@@ -1878,11 +2170,15 @@ export default function Schedules() {
                       <p className="text-xs text-slate-500">{level?.name}</p>
                     </div>
                     <div className="flex gap-2">
-                      <button 
-                        onClick={() => setSelectedSpecialty(spec.id)}
-                        className="p-2 bg-blue-50 text-blue-600 rounded-xl hover:bg-blue-100 transition-all"
-                        title="عرض الجدول"
-                      >
+                       <button 
+                         onClick={() => {
+                           setSelectedCycle(level?.cycleId || '');
+                           setSelectedLevel(spec.levelId || '');
+                           setSelectedSpecialty(spec.id);
+                         }}
+                         className="p-2 bg-blue-50 text-blue-600 rounded-xl hover:bg-blue-100 transition-all"
+                         title="عرض الجدول"
+                       >
                         <Calendar className="w-5 h-5" />
                       </button>
                       <button 
@@ -1907,7 +2203,7 @@ export default function Schedules() {
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
               <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
                 <h3 className="font-bold text-slate-900">
-                  جدول تخصص: {specialties.find(s => s.id === selectedSpecialty)?.name}
+                  جدول تخصص: {resolveSpecialty(selectedSpecialty)?.name}
                 </h3>
                 {(!isAdmin && !isViceAdmin) && (
                   <button 
@@ -1942,9 +2238,9 @@ export default function Schedules() {
                           if (span === 0) return null;
 
                           const session = getSessionAt(day, period);
-                          const module = modules.find(m => m.id === session?.moduleId);
+                          const module = resolveModule(session?.moduleId);
                           const teacher = resolveTeacher(session?.teacherId);
-                          const room = rooms.find(r => r.id === session?.roomId);
+                          const room = resolveRoom(session?.roomId);
                           const hasConflict = session ? hasSemesterConflict(session) : false;
 
                           // Check if this is an ST module and we are in L2
@@ -2029,6 +2325,24 @@ export default function Schedules() {
       {/* Exam Schedule Grid */}
       {activeTab === 'exams' && (
         <div className="space-y-4">
+          {(isAdmin || isViceAdmin) && selectedLevel && (
+            <div className="flex gap-2 justify-end">
+              <button 
+                onClick={handleDeleteFakeExams}
+                className="px-4 py-2 bg-amber-50 text-amber-700 rounded-xl hover:bg-amber-100 transition-all text-xs font-bold flex items-center gap-2 border border-amber-100"
+              >
+                <AlertTriangle className="w-4 h-4" />
+                حذف الحراسات الوهمية
+              </button>
+              <button 
+                onClick={handleDeleteAllExams}
+                className="px-4 py-2 bg-red-50 text-red-700 rounded-xl hover:bg-red-100 transition-all text-xs font-bold flex items-center gap-2 border border-red-100"
+              >
+                <Trash2 className="w-4 h-4" />
+                حذف جميع الحراسات
+              </button>
+            </div>
+          )}
           {!selectedLevel ? (
             <div className="bg-white p-12 rounded-2xl border-2 border-dashed border-slate-200 text-center">
               <ClipboardList className="w-12 h-12 text-slate-300 mx-auto mb-4" />
@@ -2267,11 +2581,11 @@ export default function Schedules() {
                           >
                             <div className="p-4 min-h-[160px] h-full w-full flex flex-col">
                               {sessions.map(exam => {
-                                const module = modules.find(m => m.id === exam.moduleId || m.name === exam.moduleId);
+                                const module = resolveModule(exam.moduleId);
                                 
                                 const renderRoomInfo = () => {
                                   if (exam.mode === 'Simple') {
-                                    const roomNames = exam.roomIds?.map(id => rooms.find(r => r.id === id || r.name === id)?.name).filter(Boolean).join(' + ') || 'Room --/--';
+                                    const roomNames = exam.roomIds?.map(id => resolveRoom(id)?.name).filter(Boolean).join(' + ') || 'Room --/--';
                                     const invigNames = exam.invigilators?.map(id => {
                                       const t = resolveTeacher(id);
                                       return formatTeacherName(t?.displayName || id);
@@ -2318,7 +2632,7 @@ export default function Schedules() {
                                           {/* Rooms/Groups at Bottom */}
                                           <div className="flex flex-wrap justify-between items-end mt-auto gap-2">
                                             {exam.roomAssignments?.map((ra, idx) => {
-                                              const room = rooms.find(r => r.id === ra.roomId || r.name === ra.roomId);
+                                              const room = resolveRoom(ra.roomId);
                                               const groupText = ra.groups && ra.groups.length > 0 ? ` (${ra.groups.join(', ')})` : '';
                                               return (
                                                 <div 
@@ -2462,8 +2776,8 @@ export default function Schedules() {
                     </td>
                     {PERIODS.map(period => {
                       const session = getHallSessionsAt(day, period, selectedRoom);
-                      const module = modules.find(m => m.id === session?.moduleId || m.name === session?.moduleId);
-                      const specialty = specialties.find(s => s.id === session?.specialtyId || s.name === session?.specialtyId);
+                      const module = resolveModule(session?.moduleId);
+                      const specialty = resolveSpecialty(session?.specialtyId);
 
                       return (
                         <td key={period} className="p-2 border-l border-slate-100 h-32 relative group">
@@ -2639,9 +2953,9 @@ export default function Schedules() {
                               <div className="flex flex-col gap-2 h-full">
                                 {sessions.length > 0 ? (
                                   sessions.map((session, idx) => {
-                                    const module = modules.find(m => m.id === session.moduleId || m.name === session.moduleId);
-                                    const room = rooms.find(r => r.id === session.roomId || r.name === session.roomId);
-                                    const specialty = specialties.find(s => s.id === session.specialtyId || s.name === session.specialtyId);
+                                    const module = resolveModule(session.moduleId);
+                                    const room = resolveRoom(session.roomId);
+                                    const specialty = resolveSpecialty(session.specialtyId);
 
                                     return (
                                       <div key={idx} className={cn(
@@ -2788,17 +3102,17 @@ export default function Schedules() {
                       return (a.time || '').localeCompare(b.time || '');
                     })
                     .map(exam => {
-                      const module = modules.find(m => m.id === exam.moduleId);
-                      const specialty = specialties.find(s => s.id === (exam.specialtyId || module?.specialtyId));
+                      const module = resolveModule(exam.moduleId);
+                      const specialty = resolveSpecialty(exam.specialtyId || module?.specialtyId);
                       
                       let roomInfo = '';
                       const mode = exam.mode || (exam.roomAssignments && exam.roomAssignments.length > 0 ? 'Detailed' : 'Simple');
                       
                       if (mode === 'Simple') {
-                        roomInfo = exam.roomIds?.map(id => rooms.find(r => r.id === id)?.name).filter(Boolean).join(' + ') || '';
+                        roomInfo = exam.roomIds?.map(id => resolveRoom(id)?.name).filter(Boolean).join(' + ') || '';
                       } else {
                         const myAssignment = exam.roomAssignments?.find(ra => ra.invigilators.includes(selectedTeacherId || ''));
-                        const room = rooms.find(r => r.id === myAssignment?.roomId);
+                        const room = resolveRoom(myAssignment?.roomId);
                         roomInfo = room ? `${room.name}${myAssignment?.groups?.length ? ` (${myAssignment.groups.join(', ')})` : ''}` : '';
                       }
 
@@ -2806,9 +3120,15 @@ export default function Schedules() {
                         <tr key={exam.id} className="border-b border-slate-200 last:border-0">
                           <td className="p-4 font-bold text-slate-900 border border-slate-200 whitespace-nowrap">{exam.date}</td>
                           <td className="p-4 text-blue-600 font-medium border border-slate-200 whitespace-nowrap">{exam.time}</td>
-                          <td className="p-4 font-bold text-slate-700 border border-slate-200 whitespace-nowrap">{module?.name}</td>
-                          <td className="p-4 text-slate-600 border border-slate-200 whitespace-nowrap">{roomInfo}</td>
-                          <td className="p-4 text-slate-500 border border-slate-200 whitespace-nowrap">{specialty?.name}</td>
+                          <td className="p-4 font-bold text-slate-700 border border-slate-200 whitespace-nowrap">
+                            {module?.name || (loading ? 'جاري التحميل...' : exam.moduleId || '---')}
+                          </td>
+                          <td className="p-4 text-slate-600 border border-slate-200 whitespace-nowrap">
+                            {roomInfo || (loading ? 'جاري التحميل...' : '---')}
+                          </td>
+                          <td className="p-4 text-slate-500 border border-slate-200 whitespace-nowrap">
+                            {specialty?.name || (loading ? 'جاري التحميل...' : '---')}
+                          </td>
                         </tr>
                       );
                     })}
@@ -3171,17 +3491,32 @@ export default function Schedules() {
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2 p-3 bg-blue-50 rounded-xl border border-blue-100">
-                      <input 
-                        type="checkbox" 
-                        id="applyTimeToLevel"
-                        checked={applyTimeToLevel}
-                        onChange={(e) => setApplyTimeToLevel(e.target.checked)}
-                        className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
-                      />
-                      <label htmlFor="applyTimeToLevel" className="text-xs font-bold text-blue-700 cursor-pointer">
-                        تعميم هذا التوقيت على جميع تخصصات المستوى
-                      </label>
+                    <div className="flex items-center gap-4">
+                      <div className="flex items-center gap-2 p-3 bg-blue-50 rounded-xl border border-blue-100 flex-1">
+                        <input 
+                          type="checkbox" 
+                          id="applyTimeToLevel"
+                          checked={applyTimeToLevel}
+                          onChange={(e) => setApplyTimeToLevel(e.target.checked)}
+                          className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+                        />
+                        <label htmlFor="applyTimeToLevel" className="text-xs font-bold text-blue-700 cursor-pointer">
+                          تعميم هذا التوقيت على جميع تخصصات المستوى
+                        </label>
+                      </div>
+
+                      <div className="flex items-center gap-2 p-3 bg-orange-50 rounded-xl border border-orange-100 flex-1">
+                        <input 
+                          type="checkbox" 
+                          id="applyRoomsToSpecialty"
+                          checked={applyRoomsToSpecialty}
+                          onChange={(e) => setApplyRoomsToSpecialty(e.target.checked)}
+                          className="w-4 h-4 text-orange-600 rounded border-slate-300 focus:ring-orange-500"
+                        />
+                        <label htmlFor="applyRoomsToSpecialty" className="text-xs font-bold text-orange-700 cursor-pointer">
+                          تعميم هذه القاعات على جميع أيام امتحانات التخصص
+                        </label>
+                      </div>
                     </div>
                   </div>
 
@@ -3266,17 +3601,47 @@ export default function Schedules() {
                             <p className="text-[10px] text-slate-400">يمكنك اختيار قاعة واحدة أو أكثر</p>
                           </div>
                           <div className="space-y-2">
-                            <label className="text-sm font-bold text-slate-700">الأساتذة الحراس</label>
+                            <div className="flex items-center justify-between">
+                              <label className="text-sm font-bold text-slate-700">الأساتذة الحراس</label>
+                              {(isAdmin || isViceAdmin) && (
+                                <button 
+                                  type="button"
+                                  onClick={handleDeleteFakeExams}
+                                  className="text-[10px] font-bold text-amber-600 hover:text-amber-700 flex items-center gap-1"
+                                  title="تنظيف الحراسات الوهمية التي قد تؤثر على العداد"
+                                >
+                                  <ShieldAlert className="w-3 h-3" />
+                                  <span>تنظيف العداد</span>
+                                </button>
+                              )}
+                            </div>
                             <div className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 h-48 overflow-y-auto space-y-1 custom-scrollbar">
                               {teachers.map(t => {
                                 const count = getTeacherExamCount(t.uid);
                                 const dayCount = getTeacherDayExamCount(t.uid, examDate);
                                 const isSelected = examInvigilators.includes(t.uid);
+                                
+                                // Get details for tooltip
+                                const teacherSessions = examSessions.filter(s => {
+                                  if (s.academicYear !== selectedYear) return false;
+                                  if (s.semester !== selectedSemester) return false;
+                                  const mod = resolveModule(s.moduleId);
+                                  if (!mod) return false; // Don't count "mystery" missing sessions if they are fully broken
+                                  if (s.mode === 'Simple') return s.invigilators?.includes(t.uid);
+                                  return s.roomAssignments?.some(ra => ra.invigilators.includes(t.uid));
+                                });
+                                
+                                const sessionDetails = teacherSessions.map(s => {
+                                  const m = resolveModule(s.moduleId);
+                                  const spec = resolveSpecialty(s.specialtyId);
+                                  return `${s.date} | ${s.time} | ${m?.name || '---'} (${spec?.name || '---'})`;
+                                }).join('\n');
+
                                 return (
                                   <label key={t.uid} className={cn(
                                     "flex items-center gap-3 p-2 rounded-lg cursor-pointer transition-all border border-transparent",
                                     isSelected ? "bg-blue-50 border-blue-100" : "hover:bg-white hover:border-slate-200"
-                                  )}>
+                                  )} title={sessionDetails || 'لا توجد حراسات سابقة'}>
                                     <input 
                                       type="checkbox"
                                       checked={isSelected}
@@ -3287,7 +3652,7 @@ export default function Schedules() {
                                       }}
                                       className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
                                     />
-                                    <div className="flex flex-col">
+                                    <div className="flex flex-col flex-1">
                                       <span className={cn("text-sm font-bold", (count >= 4 || dayCount > 0) ? "text-red-600" : "text-slate-700")}>
                                         {t.displayName}
                                       </span>
@@ -3393,46 +3758,63 @@ export default function Schedules() {
                               <div className="space-y-2">
                                 <label className="text-xs font-bold text-slate-400 uppercase">الحراس لهذه القاعة</label>
                                 <div className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 h-32 overflow-y-auto space-y-1 custom-scrollbar">
-                                  {teachers.map(t => {
-                                    const count = getTeacherExamCount(t.uid);
-                                    const dayCount = getTeacherDayExamCount(t.uid, examDate);
-                                    const isSelected = ra.invigilators.includes(t.uid);
-                                    return (
-                                      <label key={t.uid} className={cn(
-                                        "flex items-center gap-3 p-1.5 rounded-lg cursor-pointer transition-all border border-transparent",
-                                        isSelected ? "bg-blue-50 border-blue-100" : "hover:bg-white hover:border-slate-200"
-                                      )}>
-                                        <input 
-                                          type="checkbox"
-                                          checked={isSelected}
-                                          onChange={() => {
-                                            const newRa = [...roomAssignments];
-                                            const currentInvigs = newRa[idx].invigilators || [];
-                                            newRa[idx].invigilators = currentInvigs.includes(t.uid)
-                                              ? currentInvigs.filter(id => id !== t.uid)
-                                              : [...currentInvigs, t.uid];
-                                            setRoomAssignments(newRa);
-                                          }}
-                                          className="w-3.5 h-3.5 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
-                                        />
-                                        <div className="flex flex-col">
-                                          <span className={cn("text-xs font-bold", (count >= 4 || dayCount > 0) ? "text-red-600" : "text-slate-700")}>
-                                            {t.displayName}
-                                          </span>
-                                          <div className="flex items-center gap-2">
-                                            <span className="text-[9px] text-slate-400">
-                                              الفصل: {count}
+                                    {teachers.map(t => {
+                                      const count = getTeacherExamCount(t.uid);
+                                      const dayCount = getTeacherDayExamCount(t.uid, examDate);
+                                      const isSelected = ra.invigilators.includes(t.uid);
+                                      
+                                      // Get details for tooltip
+                                      const teacherSessions = examSessions.filter(s => {
+                                        if (s.academicYear !== selectedYear) return false;
+                                        if (s.semester !== selectedSemester) return false;
+                                        const mod = resolveModule(s.moduleId);
+                                        if (!mod) return false;
+                                        if (s.mode === 'Simple') return s.invigilators?.includes(t.uid);
+                                        return s.roomAssignments?.some(ra => ra.invigilators.includes(t.uid));
+                                      });
+                                      
+                                      const sessionDetails = teacherSessions.map(s => {
+                                        const m = resolveModule(s.moduleId);
+                                        const spec = resolveSpecialty(s.specialtyId);
+                                        return `${s.date} | ${s.time} | ${m?.name || '---'} (${spec?.name || '---'})`;
+                                      }).join('\n');
+
+                                      return (
+                                        <label key={t.uid} className={cn(
+                                          "flex items-center gap-3 p-1.5 rounded-lg cursor-pointer transition-all border border-transparent",
+                                          isSelected ? "bg-blue-50 border-blue-100" : "hover:bg-white hover:border-slate-200"
+                                        )} title={sessionDetails || 'لا توجد حراسات سابقة'}>
+                                          <input 
+                                            type="checkbox"
+                                            checked={isSelected}
+                                            onChange={() => {
+                                              const newRa = [...roomAssignments];
+                                              const currentInvigs = newRa[idx].invigilators || [];
+                                              newRa[idx].invigilators = currentInvigs.includes(t.uid)
+                                                ? currentInvigs.filter(id => id !== t.uid)
+                                                : [...currentInvigs, t.uid];
+                                              setRoomAssignments(newRa);
+                                            }}
+                                            className="w-3.5 h-3.5 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+                                          />
+                                          <div className="flex flex-col flex-1">
+                                            <span className={cn("text-xs font-bold", (count >= 4 || dayCount > 0) ? "text-red-600" : "text-slate-700")}>
+                                              {t.displayName}
                                             </span>
-                                            {dayCount > 0 && (
-                                              <span className="text-[9px] text-orange-500 font-bold">
-                                                اليوم: {dayCount}
+                                            <div className="flex items-center gap-2">
+                                              <span className="text-[9px] text-slate-400">
+                                                الفصل: {count}
                                               </span>
-                                            )}
+                                              {dayCount > 0 && (
+                                                <span className="text-[9px] text-orange-500 font-bold">
+                                                  اليوم: {dayCount}
+                                                </span>
+                                              )}
+                                            </div>
                                           </div>
-                                        </div>
-                                      </label>
-                                    );
-                                  })}
+                                        </label>
+                                      );
+                                    })}
                                 </div>
                               </div>
                             </div>
