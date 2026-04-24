@@ -85,6 +85,16 @@ export default function ProjectManagement() {
     fetchData();
   }, [selectedYear]);
 
+  const uniqueTeachersSorted = React.useMemo(() => {
+    const seen = new Set<string>();
+    return teachers.filter(t => {
+      const name = (t.displayName || '').trim().toLowerCase();
+      if (!name || seen.has(name)) return false;
+      seen.add(name);
+      return true;
+    }).sort((a, b) => (a.displayName || '').localeCompare(b.displayName || ''));
+  }, [teachers]);
+
   const handleAddProject = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
@@ -794,14 +804,14 @@ export default function ProjectManagement() {
                 <div className="space-y-2">
                   <label className="text-sm font-bold text-slate-700">المؤطر الرئيسي</label>
                   <select name="supervisorId" required className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500">
-                    {teachers.map(t => <option key={t.uid} value={t.uid}>{t.displayName}</option>)}
+                    {uniqueTeachersSorted.map(t => <option key={t.uid} value={t.uid}>{t.displayName}</option>)}
                   </select>
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-bold text-slate-700">المؤطر المساعد (اختياري)</label>
                   <select name="coSupervisorId" className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500">
                     <option key="none" value="">لا يوجد</option>
-                    {teachers.map(t => <option key={t.uid} value={t.uid}>{t.displayName}</option>)}
+                    {uniqueTeachersSorted.map(t => <option key={t.uid} value={t.uid}>{t.displayName}</option>)}
                   </select>
                 </div>
               </div>
@@ -876,14 +886,14 @@ export default function ProjectManagement() {
                 <div className="space-y-2">
                   <label className="text-sm font-bold text-slate-700">المؤطر الرئيسي</label>
                   <select name="supervisorId" required defaultValue={editingProject.supervisorId} className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500">
-                    {teachers.map(t => <option key={t.uid} value={t.uid}>{t.displayName}</option>)}
+                    {uniqueTeachersSorted.map(t => <option key={t.uid} value={t.uid}>{t.displayName}</option>)}
                   </select>
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-bold text-slate-700">المؤطر المساعد (اختياري)</label>
                   <select name="coSupervisorId" defaultValue={editingProject.coSupervisorId || ''} className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500">
                     <option key="none" value="">لا يوجد</option>
-                    {teachers.map(t => <option key={t.uid} value={t.uid}>{t.displayName}</option>)}
+                    {uniqueTeachersSorted.map(t => <option key={t.uid} value={t.uid}>{t.displayName}</option>)}
                   </select>
                 </div>
               </div>
@@ -1321,13 +1331,13 @@ export default function ProjectManagement() {
                     <div className="space-y-2">
                       <label className="text-sm font-bold text-slate-700">رئيس اللجنة</label>
                       <select name="presidentId" required className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500">
-                        {teachers.map(t => <option key={t.uid} value={t.uid}>{t.displayName}</option>)}
+                        {uniqueTeachersSorted.map(t => <option key={t.uid} value={t.uid}>{t.displayName}</option>)}
                       </select>
                     </div>
                     <div className="space-y-2">
                       <label className="text-sm font-bold text-slate-700">الممتحنون (يمكن اختيار أكثر من واحد)</label>
                       <select name="examinerIds" multiple required className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 min-h-[100px]">
-                        {teachers.map(t => <option key={t.uid} value={t.uid}>{t.displayName}</option>)}
+                        {uniqueTeachersSorted.map(t => <option key={t.uid} value={t.uid}>{t.displayName}</option>)}
                       </select>
                       <p className="text-[10px] text-slate-400">اضغط Ctrl للاختيار المتعدد</p>
                     </div>

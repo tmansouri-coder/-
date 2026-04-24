@@ -65,6 +65,16 @@ export default function FieldVisits() {
     fetchData();
   }, []);
 
+  const uniqueTeachersSorted = React.useMemo(() => {
+    const seen = new Set<string>();
+    return teachers.filter(t => {
+      const name = (t.displayName || '').trim().toLowerCase();
+      if (!name || seen.has(name)) return false;
+      seen.add(name);
+      return true;
+    }).sort((a, b) => (a.displayName || '').localeCompare(b.displayName || ''));
+  }, [teachers]);
+
   const handleAddVisit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
@@ -472,7 +482,7 @@ export default function FieldVisits() {
                       className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500"
                     >
                       <option value="">اختر أستاذاً...</option>
-                      {teachers.map(t => <option key={t.uid} value={t.displayName}>{t.displayName}</option>)}
+                      {uniqueTeachersSorted.map(t => <option key={t.uid} value={t.displayName}>{t.displayName}</option>)}
                     </select>
                   </div>
                   <div className="space-y-1">

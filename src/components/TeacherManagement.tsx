@@ -231,10 +231,97 @@ export default function TeacherManagement() {
   const getAllEmails = () => teachers.map(t => t.email).join(', ');
   const getSpecialtyManagerEmails = () => teachers.filter(t => t.role === 'specialty_manager').map(t => t.email).join(', ');
 
+  const [showDuplicateCleanup, setShowDuplicateCleanup] = useState(false);
+
+  const duplicates = React.useMemo(() => {
+    const nameMap = new Map<string, User[]>();
+    teachers.forEach(t => {
+      const name = (t.displayName || '').trim().toLowerCase();
+      if (!name) return;
+      if (!nameMap.has(name)) nameMap.set(name, []);
+      nameMap.get(name)!.push(t);
+    });
+    return Array.from(nameMap.entries()).filter(([_, users]) => users.length > 1);
+  }, [teachers]);
+
+  const handleCleanupDuplicates = async (name: string, keepUid: string) => {
+    const usersToDelete = teachers.filter(t => (t.displayName || '').trim().toLowerCase() === name.toLowerCase() && t.uid !== keepUid);
+    if (usersToDelete.length === 0) return;
+
+    try {
+      const toastId = toast.loading('جاري حذف الحسابات المكررة...');
+      const batch = writeBatch(db);
+      usersToDelete.forEach(u => {
+        batch.delete(doc(db, 'users', u.uid));
+      });
+      await batch.commit();
+      
+      setTeachers(prev => prev.filter(t => !usersToDelete.some(ut => ut.uid === t.uid)));
+      toast.success(`تم حذف ${usersToDelete.length} حساب مكرر لـ ${name}`, { id: toastId });
+    } catch (err) {
+      console.error('Cleanup duplicates error:', err);
+      toast.error('فشل حذف التكرارات');
+    }
+  };
+
   if (loading) return <div className="p-8 text-center">{t('loading')}</div>;
 
   return (
     <div className="space-y-10 pb-12" dir={isRTL ? 'rtl' : 'ltr'}>
+      {/* Duplicate Warning */}
+      {duplicates.length > 0 && (
+        <motion.div 
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-amber-50 border border-amber-200 rounded-3xl p-6 flex flex-col md:flex-row items-center justify-between gap-4 shadow-sm"
+        >
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 bg-amber-100 rounded-2xl flex items-center justify-center text-amber-600">
+              <AlertCircle className="w-6 h-6" />
+            </div>
+            <div>
+              <h3 className="font-bold text-amber-900">تم اكتشاف تكرار في أسماء الأساتذة</h3>
+              <p className="text-sm text-amber-700">يوجد {duplicates.length} اسماً مكرراً في النظام. يمكنك حذف النسخ الزائدة من هنا.</p>
+            </div>
+          </div>
+          <button 
+            onClick={() => setShowDuplicateCleanup(!showDuplicateCleanup)}
+            className="px-6 py-2 bg-amber-600 text-white rounded-xl font-bold text-sm hover:bg-amber-700 transition-all shadow-sm shadow-amber-200"
+          >
+            {showDuplicateCleanup ? 'إخفاء الأداة' : 'معالجة التكرارات'}
+          </button>
+        </motion.div>
+      )}
+
+      {showDuplicateCleanup && duplicates.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pb-8">
+          {duplicates.map(([name, users]) => (
+            <div key={name} className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm space-y-4">
+              <div className="flex items-center justify-between">
+                <h4 className="font-bold text-slate-900 capitalize">{name}</h4>
+                <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded-lg text-[10px] font-bold">{users.length} نسخ</span>
+              </div>
+              <div className="space-y-2">
+                {users.map(u => (
+                  <div key={u.uid} className="flex items-center justify-between gap-2 p-2 bg-slate-50 rounded-xl text-xs">
+                    <div className="truncate">
+                      <p className="font-bold truncate">{u.email}</p>
+                      <p className="text-slate-400 text-[10px]">{u.role}</p>
+                    </div>
+                    <button 
+                      onClick={() => handleCleanupDuplicates(name, u.uid)}
+                      className="whitespace-nowrap px-3 py-1 bg-white border border-red-100 text-red-600 rounded-lg hover:bg-red-600 hover:text-white transition-all text-[10px] font-black"
+                    >
+                      إبقاء هذا وحذف الآخرين
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Header Section */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-8">
         <div className="space-y-2">

@@ -692,6 +692,16 @@ export default function Schedules() {
     levels.filter(l => l.cycleId === selectedCycle),
     [levels, selectedCycle]
   );
+
+  const uniqueTeachersSorted = useMemo(() => {
+    const seen = new Set<string>();
+    return teachers.filter(t => {
+      const name = (t.displayName || '').trim().toLowerCase();
+      if (!name || seen.has(name)) return false;
+      seen.add(name);
+      return true;
+    }).sort((a, b) => (a.displayName || '').localeCompare(b.displayName || '', i18n.language));
+  }, [teachers, i18n.language]);
   
   const correctedSpecialties = useMemo(() => {
     return specialties.map(spec => {
@@ -741,6 +751,70 @@ export default function Schedules() {
 
   const getExamSessionsAt = (date: string, specialtyId: string) => {
     return examSessionsMap.get(`${date}-${specialtyId}`)?.[0];
+  };
+
+  const [moduleSearch, setModuleSearch] = useState('');
+
+  const filteredModulesForExam = useMemo(() => {
+    if (!examSpecialty && !moduleSearch) return [];
+    
+    let list = modules;
+    if (examSpecialty && !moduleSearch) {
+      list = modules.filter(m => m.specialtyId === examSpecialty);
+    }
+    
+    if (moduleSearch) {
+      const s = moduleSearch.toLowerCase();
+      list = modules.filter(m => 
+        m.name.toLowerCase().includes(s) || 
+        (specialties.find(spec => spec.id === m.specialtyId)?.name || '').toLowerCase().includes(s)
+      );
+    }
+    
+    return list;
+  }, [modules, examSpecialty, moduleSearch, specialties]);
+
+  const handleExamDragStart = (e: React.DragEvent, exam: ExamSession) => {
+    if (!isAdmin && !isViceAdmin) return;
+    e.dataTransfer.setData('examId', exam.id);
+    e.dataTransfer.effectAllowed = 'move';
+    // Visual feedback
+    if (e.currentTarget instanceof HTMLElement) {
+      e.currentTarget.style.opacity = '0.4';
+    }
+  };
+
+  const handleExamDragEnd = (e: React.DragEvent) => {
+    if (e.currentTarget instanceof HTMLElement) {
+      e.currentTarget.style.opacity = '1';
+    }
+  };
+
+  const handleExamDrop = async (e: React.DragEvent, newDate: string, newSpecialtyId: string) => {
+    e.preventDefault();
+    if (!isAdmin && !isViceAdmin) return;
+    
+    const examId = e.dataTransfer.getData('examId');
+    if (!examId) return;
+
+    const exam = examSessions.find(s => s.id === examId);
+    if (!exam) return;
+
+    if (exam.date === newDate && exam.specialtyId === newSpecialtyId) return;
+
+    try {
+      const toastId = toast.loading('جاري نقل الامتحان...');
+      await updateDoc(doc(db, 'examSessions', examId), {
+        date: newDate,
+        specialtyId: newSpecialtyId,
+        updatedAt: new Date().toISOString()
+      });
+      
+      toast.success('تم نقل الامتحان بنجاح', { id: toastId });
+    } catch (err) {
+      console.error('Drop failed:', err);
+      toast.error('فشل نقل الامتحان');
+    }
   };
 
   const getHallSessionsAt = (day: string, period: string, roomId: string) => {
@@ -2551,6 +2625,23 @@ export default function Schedules() {
                           <td 
                             key={spec.id} 
                             className="p-0 border-l-2 border-black align-top bg-[#fdf2e9] transition-colors hover:bg-[#fae5d3] cursor-pointer h-full"
+                            onDragOver={(e) => {
+                              if (isAdmin || isViceAdmin) {
+                                e.preventDefault();
+                                e.currentTarget.classList.add('bg-blue-50');
+                              }
+                            }}
+                            onDragLeave={(e) => {
+                              if (isAdmin || isViceAdmin) {
+                                e.currentTarget.classList.remove('bg-blue-50');
+                              }
+                            }}
+                            onDrop={(e) => {
+                              if (isAdmin || isViceAdmin) {
+                                e.currentTarget.classList.remove('bg-blue-50');
+                                handleExamDrop(e, date, spec.id);
+                              }
+                            }}
                             onClick={() => {
                               if (!isAdmin && !isViceAdmin) return;
                               if (sessions.length > 0) {
@@ -2656,8 +2747,12 @@ export default function Schedules() {
                                  return (
                                    <div 
                                      key={exam.id} 
+                                     draggable={isAdmin || isViceAdmin}
+                                     onDragStart={(e) => handleExamDragStart(e, exam)}
+                                     onDragEnd={handleExamDragEnd}
                                      className={cn(
                                        "mb-3 p-4 rounded-2xl border transition-all relative group shadow-sm hover:shadow-lg hover:-translate-y-0.5",
+                                       isAdmin || isViceAdmin ? "cursor-move" : "cursor-default",
                                        exam.type === 'Regular' ? "bg-white border-slate-200" : "bg-orange-50 border-orange-200",
                                        conflict && "border-red-500 ring-2 ring-red-500/20"
                                      )}
@@ -2843,7 +2938,7 @@ export default function Schedules() {
                   onChange={(e) => setSelectedTeacherId(e.target.value)}
                   className="bg-slate-50 border-none rounded-xl px-4 py-2 focus:ring-2 focus:ring-blue-500 text-sm font-bold min-w-[250px]"
                 >
-                  {teachers.map(t => <option key={t.uid} value={t.uid}>{t.displayName}</option>)}
+                  {uniqueTeachersSorted.map(t => <option key={t.uid} value={t.uid}>{t.displayName}</option>)}
                 </select>
               </div>
             )}
@@ -3291,7 +3386,7 @@ export default function Schedules() {
                       className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-slate-900 disabled:opacity-50"
                     >
                       <option value="" className="text-slate-900">اختر الأستاذ</option>
-                      {teachers.map(t => (
+                      {uniqueTeachersSorted.map(t => (
                         <option key={t.uid} value={t.uid} className="text-slate-900">
                           {t.displayName}
                         </option>
@@ -3411,9 +3506,19 @@ export default function Schedules() {
                         >
                           <option value="" className="text-slate-900">اختر التخصص</option>
                           {specialties
-                            .filter(s => s.levelId === selectedLevel)
+                            .sort((a, b) => a.name.localeCompare(b.name))
                             .map(s => <option key={s.id} value={s.id} className="text-slate-900">{s.name}</option>)}
                         </select>
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-sm font-bold text-slate-700 font-sans">بحث عن مقياس (اختياري)</label>
+                        <input
+                          type="text"
+                          placeholder="اكتب اسم المقياس هنا..."
+                          value={moduleSearch}
+                          onChange={(e) => setModuleSearch(e.target.value)}
+                          className="w-full bg-blue-50/50 border-blue-100 border rounded-xl px-4 py-3 text-slate-900 focus:ring-2 focus:ring-blue-500/20 placeholder:text-slate-400"
+                        />
                       </div>
                       <div className="space-y-2">
                         <label className="text-sm font-bold text-slate-700">المقياس</label>
@@ -3436,17 +3541,29 @@ export default function Schedules() {
                           className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-slate-900 focus:ring-2 focus:ring-blue-500/20"
                         >
                           <option value="" className="text-slate-900">اختر المقياس</option>
-                          {modules
-                            .filter(m => m.specialtyId === examSpecialty && m.semester === selectedSemester)
-                            .filter(m => {
-                              if (editingExam && editingExam.moduleId === m.id) return true;
-                              return !examSessions.some(s => 
-                                s.moduleId === m.id && 
-                                s.semester === selectedSemester && 
-                                s.academicYear === selectedYear
-                              );
-                            })
-                            .map(m => <option key={m.id} value={m.id} className="text-slate-900">{m.name}</option>)}
+                          {filteredModulesForExam.length > 0 ? (
+                            filteredModulesForExam
+                              .sort((a, b) => a.name.localeCompare(b.name))
+                              .map(m => (
+                                <option key={m.id} value={m.id} className="text-slate-900">
+                                  {m.name} ({m.semester})
+                                </option>
+                              ))
+                          ) : examSpecialty && (
+                            <option value="" disabled className="text-slate-400 italic">لا توجد مقاييس في هذا التخصص</option>
+                          )}
+                          {/* Fallback to show all modules if needed */}
+                          {examSpecialty && (
+                            <optgroup label="البحث في كافة المقاييس (ماستر / مهندس / إلخ)" className="text-slate-500">
+                              {modules
+                                .sort((a, b) => a.name.localeCompare(b.name))
+                                .map(m => (
+                                  <option key={m.id} value={m.id} className="text-slate-900">
+                                    {m.name} {m.specialtyId === examSpecialty ? '' : `(${specialties.find(s => s.id === m.specialtyId)?.name || 'تخصص آخر'})`}
+                                  </option>
+                                ))}
+                            </optgroup>
+                          )}
                         </select>
                       </div>
                     </div>
@@ -3618,7 +3735,7 @@ export default function Schedules() {
                               )}
                             </div>
                             <div className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 h-48 overflow-y-auto space-y-1 custom-scrollbar">
-                              {teachers.map(t => {
+                              {uniqueTeachersSorted.map(t => {
                                 const count = getTeacherExamCount(t.uid);
                                 const dayCount = getTeacherDayExamCount(t.uid, examDate);
                                 const isSelected = examInvigilators.includes(t.uid);
@@ -3760,7 +3877,7 @@ export default function Schedules() {
                               <div className="space-y-2">
                                 <label className="text-xs font-bold text-slate-400 uppercase">الحراس لهذه القاعة</label>
                                 <div className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 h-32 overflow-y-auto space-y-1 custom-scrollbar">
-                                    {teachers.map(t => {
+                                    {uniqueTeachersSorted.map(t => {
                                       const count = getTeacherExamCount(t.uid);
                                       const dayCount = getTeacherDayExamCount(t.uid, examDate);
                                       const isSelected = ra.invigilators.includes(t.uid);

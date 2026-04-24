@@ -59,6 +59,16 @@ export default function OvertimeCalc() {
     fetchData();
   }, [selectedYear]);
 
+  const uniqueTeachersSorted = React.useMemo(() => {
+    const seen = new Set<string>();
+    return teachers.filter(t => {
+      const name = (t.displayName || '').trim().toLowerCase();
+      if (!name || seen.has(name)) return false;
+      seen.add(name);
+      return true;
+    }).sort((a, b) => (a.displayName || '').localeCompare(b.displayName || ''));
+  }, [teachers]);
+
   const getMonthsInSemester = (semester: 'S1' | 'S2') => {
     if (!calendar) return [];
     const start = new Date(semester === 'S1' ? calendar.s1Start : calendar.s2Start);
@@ -415,7 +425,7 @@ export default function OvertimeCalc() {
                   </tr>
                 </thead>
                 <tbody>
-                  {teachers.map(teacher => {
+                  {uniqueTeachersSorted.map(teacher => {
                     const sem = filterSemester === 'All' ? 'S1' : filterSemester;
                     const { weeklyHours, totalTaughtHours, overtimeWeekly, baseWeeklyQuota } = calculateHours(teacher.uid, sem);
                     const hasMetQuota = weeklyHours >= baseWeeklyQuota;
