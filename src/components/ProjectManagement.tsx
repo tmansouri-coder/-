@@ -67,9 +67,13 @@ export default function ProjectManagement() {
         });
 
         setProjects(projectsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Project)));
-        setTeachers(usersSnap.docs.map(d => ({ uid: d.id, ...d.data() } as User)).filter(u => u.role === 'teacher' || u.role === 'admin'));
+        const teachersList = usersSnap.docs.map(d => ({ uid: d.id, ...d.data() } as User)).filter(u => u.role === 'teacher' || u.role === 'admin');
+        teachersList.sort((a, b) => (a.displayName || '').localeCompare(b.displayName || ''));
+        setTeachers(teachersList);
         setSpecialties(correctedSpecialties);
-        setRooms(roomsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Room)));
+        const roomsList = roomsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Room));
+        roomsList.sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' }));
+        setRooms(roomsList);
         setCycles(cyclesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Cycle)));
         setLevels(levelDocs.map(l => ({ ...l, name: mapLevelName(l.name) })));
       } catch (err) {

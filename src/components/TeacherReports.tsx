@@ -44,7 +44,9 @@ export default function TeacherReports() {
 
     if (isAdmin || isViceAdmin) {
       getDocs(collection(db, 'users')).then(snap => {
-        setTeachers(snap.docs.map(d => ({ uid: d.id, ...d.data() } as User)));
+        const teachersList = snap.docs.map(d => ({ uid: d.id, ...d.data() } as User));
+        teachersList.sort((a, b) => (a.displayName || '').localeCompare(b.displayName || ''));
+        setTeachers(teachersList);
       });
     }
 

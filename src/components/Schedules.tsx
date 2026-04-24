@@ -221,7 +221,9 @@ export default function Schedules() {
         }));
 
         unsubscribers.push(onSnapshot(collection(db, 'rooms'), (snap) => {
-          setRooms(snap.docs.map(d => ({ id: d.id, ...d.data() } as Room)));
+          const roomsList = snap.docs.map(d => ({ id: d.id, ...d.data() } as Room));
+          roomsList.sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' }));
+          setRooms(roomsList);
           checkDone();
         }));
 

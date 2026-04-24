@@ -40,7 +40,9 @@ export default function OvertimeCalc() {
           getDocs(query(collection(db, 'pedagogicalCalendars'), where('academicYear', '==', selectedYear), limit(1)))
         ]);
 
-        setTeachers(usersSnap.docs.map(d => ({ uid: d.id, ...d.data() } as User)));
+        const teachersList = usersSnap.docs.map(d => ({ uid: d.id, ...d.data() } as User));
+        teachersList.sort((a, b) => (a.displayName || '').localeCompare(b.displayName || ''));
+        setTeachers(teachersList);
         setSessions(sessionsSnap.docs.map(d => ({ id: d.id, ...d.data() } as ScheduleSession)));
         setLogs(logsSnap.docs.map(d => ({ id: d.id, ...d.data() } as SessionLog)));
         setModules(modulesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Module)));

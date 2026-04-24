@@ -54,8 +54,12 @@ export default function SessionLogging() {
         setMySessions(sessionsSnap.docs.map(d => ({ id: d.id, ...d.data() } as ScheduleSession)));
         setLogs(logsSnap.docs.map(d => ({ id: d.id, ...d.data() } as SessionLog)));
         setModules(modulesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Module)));
-        setRooms(roomsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Room)));
-        setTeachers(teachersSnap.docs.map(d => ({ ...d.data() } as User)));
+        const roomsList = roomsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Room));
+        roomsList.sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' }));
+        setRooms(roomsList);
+        const teachersList = teachersSnap.docs.map(d => ({ ...d.data() } as User));
+        teachersList.sort((a, b) => (a.displayName || '').localeCompare(b.displayName || ''));
+        setTeachers(teachersList);
         setCycles(cyclesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Cycle)));
         setLevels(levelsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Level)));
         setSpecialties(specialtiesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Specialty)));

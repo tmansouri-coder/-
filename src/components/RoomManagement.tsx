@@ -18,7 +18,9 @@ export default function RoomManagement() {
     const fetchRooms = async () => {
       try {
         const snap = await getDocs(collection(db, 'rooms'));
-        setRooms(snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Room)));
+        const roomsList = snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Room));
+        roomsList.sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' }));
+        setRooms(roomsList);
       } catch (err) {
         handleFirestoreError(err, OperationType.GET, 'rooms');
       } finally {

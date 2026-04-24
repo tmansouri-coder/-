@@ -38,6 +38,8 @@ export default function TeacherManagement() {
           getDocs(collection(db, 'cycles'))
         ]);
         const teachersList = usersSnap.docs.map(d => ({ uid: d.id, ...d.data() } as User));
+        // Sort teachers alphabetically by display name
+        teachersList.sort((a, b) => (a.displayName || '').localeCompare(b.displayName || '', i18n.language));
         setTeachers(teachersList);
         setSpecialties(specialtiesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Specialty)));
         setLevels(levelsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Level)));
@@ -217,10 +219,14 @@ export default function TeacherManagement() {
     toast.success(t('copy_success'));
   };
 
-  const filteredTeachers = teachers.filter(t => 
-    (t.displayName?.toLowerCase() || '').includes(searchTerm.toLowerCase()) || 
-    (t.email?.toLowerCase() || '').includes(searchTerm.toLowerCase())
-  );
+  const filteredTeachers = React.useMemo(() => {
+    return teachers
+      .filter(t => 
+        (t.displayName?.toLowerCase() || '').includes(searchTerm.toLowerCase()) || 
+        (t.email?.toLowerCase() || '').includes(searchTerm.toLowerCase())
+      )
+      .sort((a, b) => (a.displayName || '').localeCompare(b.displayName || '', i18n.language));
+  }, [teachers, searchTerm, i18n.language]);
 
   const getAllEmails = () => teachers.map(t => t.email).join(', ');
   const getSpecialtyManagerEmails = () => teachers.filter(t => t.role === 'specialty_manager').map(t => t.email).join(', ');
