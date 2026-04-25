@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, query, where, orderBy } from 'firebase/firestore';
+import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, query, where, orderBy, writeBatch } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { Cycle, Level, Module, Specialty } from '../types';
 import { BookOpen, ChevronRight, Layers, GraduationCap, Plus, Trash2, Edit2, Save, X } from 'lucide-react';
@@ -10,7 +10,8 @@ import { motion, AnimatePresence } from 'motion/react';
 import toast from 'react-hot-toast';
 
 export default function AcademicStructure() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, isViceAdmin } = useAuth();
+  const canManage = isAdmin || isViceAdmin;
   const { selectedYear } = useAcademicYear();
   const [cycles, setCycles] = useState<Cycle[]>([]);
   const [levels, setLevels] = useState<Level[]>([]);
@@ -24,6 +25,25 @@ export default function AcademicStructure() {
 
   const [showAddModal, setShowAddModal] = useState<{ type: 'cycle' | 'level' | 'specialty' | 'module', parentId?: string } | null>(null);
   const [editingItem, setEditingItem] = useState<{ id: string, name: string, type: string } | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<{ id: string, type: string, name: string } | null>(null);
+
+  const getLevelRank = (name: string) => {
+    const lower = name.toLowerCase();
+    if (lower.includes('1') || lower.includes('first') || lower.includes('أولى')) return 1;
+    if (lower.includes('2') || lower.includes('second') || lower.includes('ثانية')) return 2;
+    if (lower.includes('3') || lower.includes('third') || lower.includes('ثالثة')) return 3;
+    if (lower.includes('4') || lower.includes('fourth') || lower.includes('رابعة')) return 4;
+    if (lower.includes('5') || lower.includes('fifth') || lower.includes('خامسة')) return 5;
+    return 99;
+  };
+
+  const getCycleRank = (name: string) => {
+    const lower = name.toLowerCase();
+    if (lower.includes('licence') || lower.includes('ليسانس')) return 1;
+    if (lower.includes('master') || lower.includes('ماستر')) return 2;
+    if (lower.includes('engineer') || lower.includes('مهندس')) return 3;
+    return 99;
+  };
 
   useEffect(() => {
     const fetchData = async () => {
@@ -38,38 +58,65 @@ export default function AcademicStructure() {
 
       setModules(moduleSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Module)));
 
-      // Check and migrate level names if needed
-      const levelDocs = levelSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Level));
-      const migrationMap: Record<string, string> = {
-        'L1': "First Year Bachelor's",
-        'L2': "Second Year Bachelor's",
-        'L3': "Third Year Bachelor's",
-        'M1': "First Year Master's",
-        'M2': "Second Year Master's"
-      };
+      const cycleDocs = cycleSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Cycle))
+        .sort((a, b) => getCycleRank(a.name) - getCycleRank(b.name));
+      const levelDocs = levelSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Level))
+        .sort((a, b) => {
+          const cycleA = cycleDocs.find(c => c.id === a.cycleId);
+          const cycleB = cycleDocs.find(c => c.id === b.cycleId);
+          const cycleDiff = getCycleRank(cycleA?.name || '') - getCycleRank(cycleB?.name || '');
+          if (cycleDiff !== 0) return cycleDiff;
+          return getLevelRank(a.name) - getLevelRank(b.name);
+        });
 
       if (isAdmin) {
+        const batch = writeBatch(db);
         let hasChanges = false;
+        
+        const migrationMap: Record<string, string> = {
+          'L1': "First Year Bachelor's",
+          'L2': "Second Year Bachelor's",
+          'L3': "Third Year Bachelor's",
+          'M1': "First Year Master's",
+          'M2': "Second Year Master's"
+        };
+
+        const engineeringCycleId = cycleDocs.find(c => (c.name || '').includes('مهندس'))?.id;
+
         for (const level of levelDocs) {
+          // 1. Rename if in map
           if (migrationMap[level.name]) {
             const newName = migrationMap[level.name];
-            try {
-              await updateDoc(doc(db, 'levels', level.id), { name: newName });
-              level.name = newName;
-              hasChanges = true;
-            } catch (err) {
-              console.error(`Failed to migrate level ${level.id}:`, err);
-            }
+            batch.update(doc(db, 'levels', level.id), { name: newName });
+            level.name = newName;
+            hasChanges = true;
+          }
+
+          // 2. Fix cycle for engineering levels
+          const lowerName = (level.name || '').toLowerCase();
+          const isEngName = lowerName.includes('year engineering') || 
+                           (['1st', '2nd', '3rd', '4th', '5th'].some(s => lowerName.startsWith(s)) && !lowerName.includes('bachelor') && !lowerName.includes('master'));
+          
+          if (engineeringCycleId && isEngName && level.cycleId !== engineeringCycleId) {
+            batch.update(doc(db, 'levels', level.id), { cycleId: engineeringCycleId });
+            level.cycleId = engineeringCycleId;
+            hasChanges = true;
           }
         }
+        
         if (hasChanges) {
-          toast.success('تم تحديث أسماء المستويات بنجاح');
+          await batch.commit();
+          toast.success('تم تحديث الهيكل الأكاديمي');
         }
       }
 
-      setCycles(cycleSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Cycle)));
-      setLevels(levelDocs.map(l => ({ ...l, name: mapLevelName(l.name) })));
-      setSpecialties(specSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Specialty)));
+      setCycles(cycleDocs);
+      setLevels(levelDocs.map(l => {
+        const cycle = cycleDocs.find(c => c.id === l.cycleId);
+        return { ...l, name: mapLevelName(l.name, cycle?.name || '') };
+      }));
+      setSpecialties(specSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Specialty))
+        .sort((a, b) => (a.name || '').localeCompare(b.name || '')));
       setLoading(false);
     } catch (err) {
       handleFirestoreError(err, OperationType.GET, 'academic_structure');
@@ -88,13 +135,20 @@ export default function AcademicStructure() {
       let docRef;
       if (showAddModal.type === 'cycle') {
         docRef = await addDoc(collection(db, 'cycles'), { name });
-        setCycles(prev => [...prev, { id: docRef.id, name: name as any }]);
+        setCycles(prev => [...prev, { id: docRef.id, name: name as any }].sort((a, b) => getCycleRank(a.name) - getCycleRank(b.name)));
       } else if (showAddModal.type === 'level') {
         docRef = await addDoc(collection(db, 'levels'), { name, cycleId: showAddModal.parentId });
-        setLevels(prev => [...prev, { id: docRef.id, name, cycleId: showAddModal.parentId! }]);
+        const newLevel = { id: docRef.id, name, cycleId: showAddModal.parentId! };
+        setLevels(prev => [...prev, newLevel].sort((a, b) => {
+          const cycleA = cycles.find(c => c.id === a.cycleId);
+          const cycleB = cycles.find(c => c.id === b.cycleId);
+          const cycleDiff = getCycleRank(cycleA?.name || '') - getCycleRank(cycleB?.name || '');
+          if (cycleDiff !== 0) return cycleDiff;
+          return getLevelRank(a.name) - getLevelRank(b.name);
+        }));
       } else if (showAddModal.type === 'specialty') {
         docRef = await addDoc(collection(db, 'specialties'), { name, levelId: showAddModal.parentId });
-        setSpecialties(prev => [...prev, { id: docRef.id, name, levelId: showAddModal.parentId! }]);
+        setSpecialties(prev => [...prev, { id: docRef.id, name, levelId: showAddModal.parentId! }].sort((a, b) => (a.name || '').localeCompare(b.name || '')));
       } else if (showAddModal.type === 'module') {
         const semester = formData.get('semester') as 'S1' | 'S2';
         const moduleData = { 
@@ -108,7 +162,7 @@ export default function AcademicStructure() {
       }
       setShowAddModal(null);
     } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, showAddModal.type + 's');
+      handleFirestoreError(err, OperationType.CREATE, (showAddModal.type === 'specialty' ? 'specialties' : showAddModal.type + 's'));
     }
   };
 
@@ -119,7 +173,7 @@ export default function AcademicStructure() {
     const name = formData.get('name') as string;
 
     try {
-      const collectionName = editingItem.type + 's';
+      const collectionName = editingItem.type === 'specialty' ? 'specialties' : editingItem.type + 's';
       await updateDoc(doc(db, collectionName, editingItem.id), { name });
       
       if (editingItem.type === 'cycle') setCycles(prev => prev.map(c => c.id === editingItem.id ? { ...c, name: name as any } : c));
@@ -129,22 +183,31 @@ export default function AcademicStructure() {
       
       setEditingItem(null);
     } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, editingItem.type + 's/' + editingItem.id);
+      handleFirestoreError(err, OperationType.UPDATE, (editingItem.type === 'specialty' ? 'specialties' : editingItem.type + 's') + '/' + editingItem.id);
     }
   };
 
   const handleDelete = async (id: string, type: string) => {
-    if (!window.confirm('هل أنت متأكد من الحذف؟')) return;
+    if (!id) {
+      toast.error('معرف غير صالح');
+      return;
+    }
+    
+    const loadingToast = toast.loading('جاري الحذف...');
     try {
-      const collectionName = type + 's';
+      const collectionName = type === 'specialty' ? 'specialties' : type + 's';
       await deleteDoc(doc(db, collectionName, id));
       
       if (type === 'cycle') setCycles(prev => prev.filter(c => c.id !== id));
       if (type === 'level') setLevels(prev => prev.filter(l => l.id !== id));
       if (type === 'specialty') setSpecialties(prev => prev.filter(s => s.id !== id));
       if (type === 'module') setModules(prev => prev.filter(m => m.id !== id));
+      
+      toast.success('تم الحذف بنجاح', { id: loadingToast });
+      setConfirmDelete(null);
     } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, type + 's/' + id);
+      console.error(`Error deleting ${type}:`, err);
+      toast.error('فشل عملية الحذف', { id: loadingToast });
     }
   };
 
@@ -158,7 +221,7 @@ export default function AcademicStructure() {
           <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">الهيكل الأكاديمي</h1>
           <p className="text-slate-500 font-medium">تصفح وإدارة الأطوار، المستويات، التخصصات، والمقاييس الدراسية</p>
         </div>
-        {isAdmin && (
+        {canManage && (
           <button 
             onClick={() => setShowAddModal({ type: 'cycle' })}
             className="btn-primary flex items-center gap-2"
@@ -201,11 +264,11 @@ export default function AcademicStructure() {
                     >
                       {cycle.name}
                     </button>
-                    {isAdmin && (
-                      <div className="flex gap-1 z-10 opacity-0 group-hover:opacity-100 transition-all">
-                        <button onClick={() => setShowAddModal({ type: 'level', parentId: cycle.id })} className={cn("p-1.5 rounded-lg transition-colors", selectedCycle === cycle.id ? "hover:bg-blue-500 text-white" : "hover:bg-white text-blue-600")}><Plus className="w-3.5 h-3.5" /></button>
-                        <button onClick={() => setEditingItem({ id: cycle.id, name: cycle.name, type: 'cycle' })} className={cn("p-1.5 rounded-lg transition-colors", selectedCycle === cycle.id ? "hover:bg-blue-500 text-white" : "hover:bg-white text-slate-400")}><Edit2 className="w-3.5 h-3.5" /></button>
-                        <button onClick={() => handleDelete(cycle.id, 'cycle')} className={cn("p-1.5 rounded-lg transition-colors", selectedCycle === cycle.id ? "hover:bg-blue-500 text-white" : "hover:bg-white text-red-600")}><Trash2 className="w-3.5 h-3.5" /></button>
+                    {canManage && (
+                      <div className="flex gap-1 z-10 opacity-100 transition-all">
+                        <button onClick={() => setShowAddModal({ type: 'level', parentId: cycle.id })} className={cn("p-1.5 rounded-lg transition-colors bg-white/10 hover:bg-white/20", selectedCycle === cycle.id ? "text-white" : "text-blue-600")}><Plus className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => setEditingItem({ id: cycle.id, name: cycle.name, type: 'cycle' })} className={cn("p-1.5 rounded-lg transition-colors bg-white/10 hover:bg-white/20", selectedCycle === cycle.id ? "text-white" : "text-slate-400")}><Edit2 className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => setConfirmDelete({ id: cycle.id, type: 'cycle', name: cycle.name })} className={cn("p-1.5 rounded-lg transition-colors bg-white/10 hover:bg-white/20", selectedCycle === cycle.id ? "text-white" : "text-red-600")}><Trash2 className="w-3.5 h-3.5" /></button>
                       </div>
                     )}
                   </div>
@@ -231,11 +294,11 @@ export default function AcademicStructure() {
                           >
                             {level.name}
                           </button>
-                          {isAdmin && (
-                            <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-all">
-                              <button onClick={() => setShowAddModal({ type: 'specialty', parentId: level.id })} className="p-1.5 hover:bg-white rounded-lg text-blue-600 shadow-sm"><Plus className="w-3 h-3" /></button>
-                              <button onClick={() => setEditingItem({ id: level.id, name: level.name, type: 'level' })} className="p-1.5 hover:bg-white rounded-lg text-slate-400 shadow-sm"><Edit2 className="w-3 h-3" /></button>
-                              <button onClick={() => handleDelete(level.id, 'level')} className="p-1.5 hover:bg-white rounded-lg text-red-600 shadow-sm"><Trash2 className="w-3 h-3" /></button>
+                          {canManage && (
+                            <div className="flex gap-1 opacity-100 transition-all">
+                              <button onClick={() => setShowAddModal({ type: 'specialty', parentId: level.id })} className="p-1.5 bg-white rounded-lg text-blue-600 shadow-sm border border-slate-100"><Plus className="w-3 h-3" /></button>
+                              <button onClick={() => setEditingItem({ id: level.id, name: level.name, type: 'level' })} className="p-1.5 bg-white rounded-lg text-slate-400 shadow-sm border border-slate-100"><Edit2 className="w-3 h-3" /></button>
+                              <button onClick={() => setConfirmDelete({ id: level.id, type: 'level', name: level.name })} className="p-1.5 bg-white rounded-lg text-red-600 shadow-sm border border-slate-100"><Trash2 className="w-3 h-3" /></button>
                             </div>
                           )}
                         </motion.div>
@@ -262,7 +325,7 @@ export default function AcademicStructure() {
                     <p className="text-sm font-medium text-slate-500 uppercase tracking-widest">{levels.find(l => l.id === selectedLevel)?.name}</p>
                   </div>
                 </div>
-                {isAdmin && (
+                {canManage && (
                   <button 
                     onClick={() => setShowAddModal({ type: 'specialty', parentId: selectedLevel })}
                     className="flex items-center gap-2 px-5 py-2.5 bg-blue-50 text-blue-600 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-blue-600 hover:text-white transition-all shadow-sm"
@@ -289,11 +352,11 @@ export default function AcademicStructure() {
                         </div>
                         <h3 className="text-lg font-black text-slate-900 tracking-tight">{spec.name}</h3>
                       </div>
-                      {isAdmin && (
-                        <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-all">
+                      {canManage && (
+                        <div className="flex gap-2 opacity-100 transition-all">
                           <button onClick={() => setShowAddModal({ type: 'module', parentId: spec.id })} className="w-9 h-9 bg-white border border-slate-200 rounded-xl flex items-center justify-center text-blue-600 hover:bg-blue-50 transition-all shadow-sm"><Plus className="w-4 h-4" /></button>
                           <button onClick={() => setEditingItem({ id: spec.id, name: spec.name, type: 'specialty' })} className="w-9 h-9 bg-white border border-slate-200 rounded-xl flex items-center justify-center text-slate-400 hover:text-blue-600 transition-all shadow-sm"><Edit2 className="w-4 h-4" /></button>
-                          <button onClick={() => handleDelete(spec.id, 'specialty')} className="w-9 h-9 bg-white border border-slate-200 rounded-xl flex items-center justify-center text-red-600 hover:bg-red-50 transition-all shadow-sm"><Trash2 className="w-4 h-4" /></button>
+                          <button onClick={() => setConfirmDelete({ id: spec.id, type: 'specialty', name: spec.name })} className="w-9 h-9 bg-white border border-slate-200 rounded-xl flex items-center justify-center text-red-600 hover:bg-red-50 transition-all shadow-sm"><Trash2 className="w-4 h-4" /></button>
                         </div>
                       )}
                     </div>
@@ -316,7 +379,7 @@ export default function AcademicStructure() {
                               {isAdmin && (
                                 <div className="flex gap-1 opacity-0 group-hover/module:opacity-100 transition-all">
                                   <button onClick={() => setEditingItem({ id: module.id, name: module.name, type: 'module' })} className="p-1.5 hover:bg-slate-50 rounded-lg text-slate-400 transition-colors"><Edit2 className="w-3.5 h-3.5" /></button>
-                                  <button onClick={() => handleDelete(module.id, 'module')} className="p-1.5 hover:bg-slate-50 rounded-lg text-red-600 transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>
+                                  <button onClick={() => setConfirmDelete({ id: module.id, type: 'module', name: module.name })} className="p-1.5 hover:bg-slate-50 rounded-lg text-red-600 transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>
                                 </div>
                               )}
                               <span className={cn(
@@ -408,6 +471,36 @@ export default function AcademicStructure() {
                 <button type="button" onClick={() => setEditingItem(null)} className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl font-bold hover:bg-slate-200 transition-all">إلغاء</button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {/* Delete Confirmation Modal */}
+      {confirmDelete && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl overflow-hidden text-center p-8">
+            <div className="w-20 h-20 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-6">
+              <Trash2 className="w-10 h-10 text-red-600" />
+            </div>
+            <h2 className="text-xl font-bold text-slate-900 mb-2">تأكيد الحذف</h2>
+            <p className="text-slate-500 mb-8 font-medium">
+              هل أنت متأكد من حذف {confirmDelete.type === 'cycle' ? 'الطور' : confirmDelete.type === 'level' ? 'المستوى' : confirmDelete.type === 'specialty' ? 'التخصص' : 'المقياس'}: <span className="text-slate-900 font-bold">"{confirmDelete.name}"</span>؟
+              {confirmDelete.type !== 'module' && <br />}
+              {confirmDelete.type !== 'module' && <span className="text-xs text-red-500 mt-2 block">سيؤدي هذا لحذف جميع العناصر التابعة له.</span>}
+            </p>
+            <div className="flex gap-4">
+              <button 
+                onClick={() => handleDelete(confirmDelete.id, confirmDelete.type)}
+                className="flex-1 bg-red-600 text-white py-3.5 rounded-2xl font-bold hover:bg-red-700 transition-all shadow-lg shadow-red-200"
+              >
+                نعم، احذف
+              </button>
+              <button 
+                onClick={() => setConfirmDelete(null)}
+                className="flex-1 bg-slate-100 text-slate-600 py-3.5 rounded-2xl font-bold hover:bg-slate-200 transition-all font-sans"
+              >
+                إلغاء
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -74,8 +74,12 @@ export default function ProjectManagement() {
         const roomsList = roomsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Room));
         roomsList.sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' }));
         setRooms(roomsList);
-        setCycles(cyclesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Cycle)));
-        setLevels(levelDocs.map(l => ({ ...l, name: mapLevelName(l.name) })));
+        const cycleDocs = cyclesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Cycle));
+        setCycles(cycleDocs);
+        setLevels(levelDocs.map(l => {
+          const cycle = cycleDocs.find(c => c.id === l.cycleId);
+          return { ...l, name: mapLevelName(l.name, cycle?.name || '') };
+        }));
       } catch (err) {
         handleFirestoreError(err, OperationType.GET, 'projects/users/specialties');
       } finally {

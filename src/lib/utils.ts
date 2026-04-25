@@ -58,7 +58,7 @@ export function getDatesForDay(dayName: string, startDate: string, endDate: stri
   return dates;
 }
 
-export function mapLevelName(name: string) {
+export function mapLevelName(name: string, cycleName?: string) {
   const map: Record<string, string> = {
     'L1': "First Year Bachelor's",
     'L2': "Second Year Bachelor's",
@@ -66,5 +66,24 @@ export function mapLevelName(name: string) {
     'M1': "First Year Master's",
     'M2': "Second Year Master's"
   };
+
+  const isEngineering = cycleName && (cycleName.includes('مهندس') || cycleName.toLowerCase().includes('engineer'));
+  
+  if (isEngineering) {
+    const lower = name.toLowerCase();
+    if (lower.includes('first') || name.includes('1')) return "1st Year Engineering";
+    if (lower.includes('second') || name.includes('2')) return "2nd Year Engineering";
+    if (lower.includes('third') || name.includes('3')) return "3rd Year Engineering";
+    if (lower.includes('fourth') || name.includes('4')) return "4th Year Engineering";
+    if (lower.includes('fifth') || name.includes('5')) return "5th Year Engineering";
+    
+    const numMatch = name.match(/\d+/);
+    if (numMatch) {
+      const n = parseInt(numMatch[0]);
+      const suffix = n === 1 ? 'st' : n === 2 ? 'nd' : n === 3 ? 'rd' : 'th';
+      return `${n}${suffix} Year Engineering`;
+    }
+  }
+
   return map[name] || name;
 }

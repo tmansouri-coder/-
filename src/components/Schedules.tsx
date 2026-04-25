@@ -206,7 +206,10 @@ export default function Schedules() {
 
         unsubscribers.push(onSnapshot(collection(db, 'levels'), (snap) => {
           const levelDocs = snap.docs.map(d => ({ id: d.id, ...d.data() } as Level));
-          setLevels(levelDocs.map(l => ({ ...l, name: mapLevelName(l.name) })));
+          // We need cycles to map names correctly, but since we are in a listener,
+          // it's safer to map on render OR ensure cycles are available.
+          // For consistency with existing code, we'll keep it but wait for cycles.
+          setLevels(levelDocs);
           checkDone();
         }));
 
@@ -758,9 +761,30 @@ export default function Schedules() {
   const filteredModulesForExam = useMemo(() => {
     if (!examSpecialty && !moduleSearch) return [];
     
+    const normalizeSemester = (s: string) => {
+      const val = s?.toUpperCase().trim() || "";
+      if (val === "ANNUAL" || val === "BOTH" || val === "ALL" || !val) return "BOTH";
+      const numMatch = val.match(/\d+/);
+      if (numMatch) {
+        const n = parseInt(numMatch[0]);
+        return n % 2 === 0 ? "S2" : "S1";
+      }
+      if (val.includes("S1")) return "S1";
+      if (val.includes("S2")) return "S2";
+      return "BOTH";
+    };
+
+    const currentTargetSem = selectedSemester || "S1";
+
     let list = modules;
     if (examSpecialty && !moduleSearch) {
-      list = modules.filter(m => m.specialtyId === examSpecialty);
+      list = modules.filter(m => {
+        const isSpecMatch = m.specialtyId === examSpecialty;
+        if (!isSpecMatch) return false;
+        
+        const mSem = normalizeSemester(m.semester);
+        return mSem === "BOTH" || mSem === currentTargetSem;
+      });
     }
     
     if (moduleSearch) {
@@ -772,7 +796,7 @@ export default function Schedules() {
     }
     
     return list;
-  }, [modules, examSpecialty, moduleSearch, specialties]);
+  }, [modules, examSpecialty, moduleSearch, specialties, selectedSemester]);
 
   const handleExamDragStart = (e: React.DragEvent, exam: ExamSession) => {
     if (!isAdmin && !isViceAdmin) return;
@@ -1244,7 +1268,10 @@ export default function Schedules() {
     doc.text('Mechanical Engineering Department - Laghouat University', 148.5, 12, { align: 'center' });
     
     doc.setFontSize(12);
-    doc.text(`${level?.name || ''} - ${specialty?.name || ''} | Semester Schedule`, 148.5, 20, { align: 'center' });
+    const currentLevel = levels.find(l => l.id === selectedLevel);
+    const currentCycleRaw = cycles.find(c => c.id === currentLevel?.cycleId);
+    const levelDisplayName = currentLevel ? mapLevelName(currentLevel.name, currentCycleRaw?.name || '') : '';
+    doc.text(`${levelDisplayName} - ${specialty?.name || ''} | Semester Schedule`, 148.5, 20, { align: 'center' });
     
     doc.setFontSize(10);
     doc.text(`Academic Year 2025/2026 - ${selectedSemester === 'S1' ? 'Semester 1' : 'Semester 2'}`, 148.5, 27, { align: 'center' });
@@ -1419,7 +1446,9 @@ export default function Schedules() {
     const sessionType = selectedExamType === 'Resit' ? 'Remedial Session' : 
                         selectedExamType === 'Regular' ? 'Normal Session' : 'Exam Schedule';
     const currentLevel = levels.find(l => l.id === selectedLevel);
-    doc.text(`${currentLevel?.name || ''} | ${sessionType}`, centerX, 20, { align: 'center' });
+    const currentCycleRawFinal = cycles.find(c => c.id === currentLevel?.cycleId);
+    const levelDisplayName = currentLevel ? mapLevelName(currentLevel.name, currentCycleRawFinal?.name || '') : '';
+    doc.text(`${levelDisplayName} | ${sessionType}`, centerX, 20, { align: 'center' });
     
     doc.setFontSize(11);
     doc.text(`Academic Year ${selectedYear} - ${selectedSemester === 'S1' ? 'Semester 1' : 'Semester 2'}`, centerX, 27, { align: 'center' });
@@ -1636,7 +1665,8 @@ export default function Schedules() {
       }
     });
 
-    doc.save(`Exam_Schedule_${level?.name || 'Export'}.pdf`);
+    const levelFileName = currentLevel ? mapLevelName(currentLevel.name, currentCycleRawFinal?.name || '').replace(/\s+/g, '_') : 'Export';
+    doc.save(`Exam_Schedule_${levelFileName}.pdf`);
   };
 
   const exportPersonalInvigilationPDF = async () => {
@@ -2164,7 +2194,11 @@ export default function Schedules() {
                 disabled={!selectedCycle}
               >
                 <option value="" className="text-slate-900">اختر المستوى</option>
-                {filteredLevels.map(l => <option key={l.id} value={l.id} className="text-slate-900">{l.name}</option>)}
+                {filteredLevels.map(l => {
+                  const currentCycleRaw = cycles.find(c => c.id === selectedCycle);
+                  const displayName = mapLevelName(l.name, currentCycleRaw?.name || '');
+                  return <option key={l.id} value={l.id} className="text-slate-900">{displayName}</option>;
+                })}
               </select>
             </div>
             {activeTab !== 'exams' && (
@@ -2243,7 +2277,12 @@ export default function Schedules() {
                   <div key={spec.id} className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between group hover:border-blue-200 transition-all">
                     <div>
                       <h4 className="font-bold text-slate-900">{spec.name}</h4>
-                      <p className="text-xs text-slate-500">{level?.name}</p>
+                      <p className="text-xs text-slate-500">
+                        {(() => {
+                          const cycle = cycles.find(c => c.id === level?.cycleId);
+                          return mapLevelName(level?.name || '', cycle?.name || '');
+                        })()}
+                      </p>
                     </div>
                     <div className="flex gap-2">
                        <button 
@@ -4150,7 +4189,11 @@ export default function Schedules() {
         specialties={specialties}
         type={activeTab === 'exams' ? 'exams' : 'semester'}
         selectedLevelId={selectedLevel}
-        selectedLevelName={levels.find(l => l.id === selectedLevel)?.name}
+        selectedLevelName={(() => {
+          const l = levels.find(l => l.id === selectedLevel);
+          const c = cycles.find(c => c.id === l?.cycleId);
+          return mapLevelName(l?.name || '', c?.name || '');
+        })()}
       />
     )}
   </div>

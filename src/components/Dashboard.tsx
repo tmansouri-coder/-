@@ -102,7 +102,11 @@ export default function Dashboard() {
         const modules = modulesSnap.docs.map(d => d.data() as Module);
         const projects = projectsSnap.docs.map(d => d.data() as Project);
         const cycles = cyclesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Cycle));
-        const levels = levelsSnap.docs.map(d => ({ id: d.id, ...d.data(), name: mapLevelName((d.data() as any).name) } as Level));
+        const levels = levelsSnap.docs.map(d => {
+          const data = d.data() as any;
+          const cycle = cycles.find(c => c.id === data.cycleId);
+          return { id: d.id, ...data, name: mapLevelName(data.name, cycle?.name || '') } as Level;
+        });
         const specialties = specialtiesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Specialty));
 
         const avgProgress = modules.length > 0 

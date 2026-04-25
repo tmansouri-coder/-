@@ -68,9 +68,13 @@ export default function DepartmentStats() {
         const teachers = teachersSnap.docs.map(d => d.data() as User);
         const students = studentsSnap.docs.map(d => d.data() as Student).filter(s => s.academicYear === selectedYear);
         const sessions = sessionsSnap.docs.map(d => d.data() as ScheduleSession).filter(s => s.academicYear === selectedYear);
-        const specialties = specialtiesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Specialty));
-        const levels = levelsSnap.docs.map(d => ({ id: d.id, ...d.data(), name: mapLevelName((d.data() as any).name) } as Level));
         const cycles = cyclesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Cycle));
+        const specialties = specialtiesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Specialty));
+        const levels = levelsSnap.docs.map(d => {
+          const data = d.data() as any;
+          const cycle = cycles.find(c => c.id === data.cycleId);
+          return { id: d.id, ...data, name: mapLevelName(data.name, cycle?.name || '') } as Level;
+        });
 
         // Helper to get cycle by specialtyId
         const getCycleBySpecialty = (specId: string) => {

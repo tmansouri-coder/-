@@ -243,7 +243,9 @@ const resources = {
       "update": "Update",
       "student_absence": "Student Absence",
       "technical_problem": "Technical Problem",
-      "internship": "Internship / Scientific Mission"
+      "internship": "Internship / Scientific Mission",
+      "department_progress": "Department Progress",
+      "specialty_progress": "Specialty Progress"
     }
   },
   fr: {
@@ -486,7 +488,9 @@ const resources = {
       "update": "Mettre à jour",
       "student_absence": "Absence des étudiants",
       "technical_problem": "Problème technique",
-      "internship": "Stage / Mission scientifique"
+      "internship": "Stage / Mission scientifique",
+      "department_progress": "Progression du département",
+      "specialty_progress": "Progression de la spécialité"
     }
   },
   ar: {
@@ -729,7 +733,9 @@ const resources = {
       "update": "تحديث",
       "student_absence": "غياب الطلبة",
       "technical_problem": "مشكل تقني",
-      "internship": "مهمة علمية / تربص"
+      "internship": "مهمة علمية / تربص",
+      "department_progress": "نسبة تقدم القسم",
+      "specialty_progress": "نسبة تقدم التخصص"
     }
   }
 };

@@ -4,7 +4,7 @@ import { db, auth, handleFirestoreError, OperationType } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
 import { ScheduleSession, SessionLog, Module, Room, User, PedagogicalCalendar, Cycle, Level, Specialty } from '../types';
-import { CheckCircle2, XCircle, AlertTriangle, Info, Clock, MapPin, BookOpen, Plus, AlertCircle, BarChart2 } from 'lucide-react';
+import { CheckCircle2, XCircle, AlertTriangle, Info, Clock, MapPin, BookOpen, Plus, AlertCircle, BarChart2, GraduationCap } from 'lucide-react';
 import { cn, isDateExcluded, getDatesForDay } from '../lib/utils';
 import { doc, updateDoc } from 'firebase/firestore';
 import toast from 'react-hot-toast';
@@ -29,6 +29,43 @@ export default function SessionLogging() {
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [updatingProgress, setUpdatingProgress] = useState<string | null>(null);
   const [activeSemester, setActiveSemester] = useState<'S1' | 'S2'>('S1');
+  const [stats, setStats] = useState({
+    departmentProgress: 0,
+    specialtyProgress: {} as Record<string, number>
+  });
+
+  useEffect(() => {
+    const calculateStats = () => {
+      if (modules.length === 0) return;
+
+      const semesterModules = modules.filter(m => m.semester === activeSemester && m.academicYear === selectedYear);
+      if (semesterModules.length === 0) {
+        setStats({ departmentProgress: 0, specialtyProgress: {} });
+        return;
+      }
+
+      // Department average
+      const deptSum = semesterModules.reduce((acc, m) => acc + (m.progress || 0), 0);
+      const deptAvg = Math.round(deptSum / semesterModules.length);
+
+      // Specialty averages
+      const specProgress: Record<string, number> = {};
+      const specsInSemester = [...new Set(semesterModules.map(m => m.specialtyId))];
+      
+      specsInSemester.forEach(specId => {
+        const specModules = semesterModules.filter(m => m.specialtyId === specId);
+        const specSum = specModules.reduce((acc, m) => acc + (m.progress || 0), 0);
+        specProgress[specId] = Math.round(specSum / specModules.length);
+      });
+
+      setStats({
+        departmentProgress: deptAvg,
+        specialtyProgress: specProgress
+      });
+    };
+
+    calculateStats();
+  }, [modules, activeSemester, selectedYear]);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -205,6 +242,48 @@ export default function SessionLogging() {
       </div>
 
       <div className="grid grid-cols-1 gap-8">
+        {(isAdmin || isViceAdmin) && (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-4">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center shadow-sm">
+                  <BarChart2 className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest">{t('department_progress')}</h3>
+                  <div className="flex items-baseline gap-1">
+                    <span className="text-2xl font-black text-slate-900 leading-none">{stats.departmentProgress}%</span>
+                  </div>
+                </div>
+              </div>
+              <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                <div className="h-full bg-blue-500 transition-all duration-1000" style={{ width: `${stats.departmentProgress}%` }} />
+              </div>
+            </div>
+
+            {specialties.filter(s => stats.specialtyProgress[s.id] !== undefined).map(spec => (
+              <div key={spec.id} className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex flex-col gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center shadow-sm">
+                    <GraduationCap className="w-6 h-6" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest truncate" title={spec.name}>
+                      {spec.name}
+                    </h3>
+                    <div className="flex items-baseline gap-1">
+                      <span className="text-2xl font-black text-slate-900 leading-none">{stats.specialtyProgress[spec.id]}%</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                  <div className="h-full bg-emerald-500 transition-all duration-1000" style={{ width: `${stats.specialtyProgress[spec.id]}%` }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Module Progress Tracking & Suggested Sessions */}
         <div className="space-y-8">
           {/* Suggested Sessions to Log */}
