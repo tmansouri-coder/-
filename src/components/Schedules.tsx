@@ -84,6 +84,30 @@ export default function Schedules() {
   const [examEndDate, setExamEndDate] = useState<string>('');
   const [selectedTeacherId, setSelectedTeacherId] = useState<string>(user?.uid || '');
 
+  const uniqueCycles = useMemo(() => {
+    const seen = new Set();
+    return cycles.filter(c => {
+      if (seen.has(c.name)) return false;
+      seen.add(c.name);
+      return true;
+    });
+  }, [cycles]);
+
+  const filteredLevels = useMemo(() => {
+    if (!selectedCycle) return [];
+    const cycle = cycles.find(c => c.id === selectedCycle);
+    if (!cycle) return [];
+    const matchingCycleIds = cycles.filter(c => c.name === cycle.name).map(c => c.id);
+    const result = levels.filter(l => matchingCycleIds.includes(l.cycleId));
+    // Also unique levels by name
+    const seen = new Set();
+    return result.filter(l => {
+      if (seen.has(l.name)) return false;
+      seen.add(l.name);
+      return true;
+    });
+  }, [selectedCycle, cycles, levels]);
+
   useEffect(() => {
     localStorage.setItem('selectedCycle', selectedCycle);
     localStorage.setItem('selectedLevel', selectedLevel);
@@ -691,11 +715,6 @@ export default function Schedules() {
   };
 
 
-  const filteredLevels = useMemo(() => 
-    levels.filter(l => l.cycleId === selectedCycle),
-    [levels, selectedCycle]
-  );
-
   const uniqueTeachersSorted = useMemo(() => {
     const seen = new Set<string>();
     return teachers.filter(t => {
@@ -1180,7 +1199,8 @@ export default function Schedules() {
             const hasModule = modules.some(m => m.id === exam.moduleId);
             const hasDate = !!exam.date;
             const hasTime = !!exam.time;
-            return !hasSpecialty || !hasModule || !hasDate || !hasTime;
+            const isCurrentYear = exam.academicYear === selectedYear;
+            return isCurrentYear && (!hasSpecialty || !hasModule || !hasDate || !hasTime);
           });
 
           if (invisibleExams.length === 0) {
@@ -2182,7 +2202,7 @@ export default function Schedules() {
                 className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 text-slate-900"
               >
                 <option value="" className="text-slate-900">اختر الطور</option>
-                {cycles.map(c => <option key={c.id} value={c.id} className="text-slate-900">{c.name}</option>)}
+                {uniqueCycles.map(c => <option key={c.id} value={c.id} className="text-slate-900">{c.name}</option>)}
               </select>
             </div>
             <div className="space-y-2">

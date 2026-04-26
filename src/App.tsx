@@ -60,28 +60,6 @@ export default function App() {
     document.documentElement.lang = i18n.language;
   }, [i18n.language]);
 
-  useEffect(() => {
-    if (user?.role === 'admin' || user?.role === 'vice_admin' || user?.email === 't.mansouri@lagh-univ.dz') {
-      const autoSeed = async () => {
-        try {
-          const lastSeed = localStorage.getItem('last_seed_v2');
-          if (lastSeed === 'done') return;
-
-          console.log('Admin detected: Triggering one-time auto-seed for new modules...');
-          const seeded = await seedInitialData(true); 
-          if (seeded) {
-            console.log('Seeding done, marking as complete and reloading...');
-            localStorage.setItem('last_seed_v2', 'done');
-            window.location.reload();
-          }
-        } catch (err) {
-          console.error('Auto-seed failed:', err);
-        }
-      };
-      autoSeed();
-    }
-  }, [user]);
-
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50">

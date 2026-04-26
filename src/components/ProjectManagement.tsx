@@ -89,6 +89,15 @@ export default function ProjectManagement() {
     fetchData();
   }, [selectedYear]);
 
+  const uniqueCycles = React.useMemo(() => {
+    const seen = new Set();
+    return cycles.filter(c => {
+      if (seen.has(c.name)) return false;
+      seen.add(c.name);
+      return true;
+    });
+  }, [cycles]);
+
   const uniqueTeachersSorted = React.useMemo(() => {
     const seen = new Set<string>();
     return teachers.filter(t => {
@@ -755,7 +764,7 @@ export default function ProjectManagement() {
                     className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500"
                   >
                     <option value="">اختر الطور...</option>
-                    {cycles.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    {uniqueCycles.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                   </select>
                 </div>
                 <div className="space-y-2">
@@ -870,7 +879,7 @@ export default function ProjectManagement() {
                     className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500"
                   >
                     <option value="">اختر الطور...</option>
-                    {cycles.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    {uniqueCycles.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                   </select>
                 </div>
                 <div className="space-y-2">

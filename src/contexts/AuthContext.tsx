@@ -41,30 +41,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           
           if (userDoc.exists()) {
             userData = userDoc.data() as User;
+            // Ensure UID is correct even if imported data has stale UID field
+            if (userData.uid !== fUser.uid) {
+              userData.uid = fUser.uid;
+            }
           } else {
-            // Check if user was seeded by email
-            const q = query(collection(db, 'users'), where('email', '==', fUser.email));
-            const querySnapshot = await getDocs(q);
-            
-            if (!querySnapshot.empty) {
-              // Link seeded user to this UID
-              const seededDoc = querySnapshot.docs[0];
-              const seededData = seededDoc.data();
-              const username = (fUser.email || seededData.email || '').split('@')[0].toLowerCase();
-              userData = {
-                ...seededData,
-                uid: fUser.uid,
-                displayName: fUser.displayName || seededData.displayName || seededData.name,
-                username,
-                isActive: true,
-              } as User;
-              
-              await setDoc(userDocRef, userData);
-              if (username) {
-                await setDoc(doc(db, 'usernames', username), { email: userData.email, uid: userData.uid });
-              }
-            } else if (fUser.email === 't.mansouri@lagh-univ.dz') {
-              // Special case for Bootstrap Admin
+            // Check if we are the bootstrap admin - do this BEFORE querying to avoid permission issues
+            if (fUser.email === 't.mansouri@lagh-univ.dz') {
+              console.log('AuthContext: Bootstrap admin detected (missing doc)');
               const username = 't.mansouri';
               userData = {
                 uid: fUser.uid,
@@ -78,23 +62,52 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               await setDoc(userDocRef, userData);
               await setDoc(doc(db, 'usernames', username), { email: userData.email, uid: userData.uid });
             } else {
-              // NOT FOUND - RESTRICT ACCESS
-              console.warn('Unauthorized access attempt:', fUser.email);
-              setError('عذراً، هذا البريد الإلكتروني غير مسجل في النظام. يرجى الاتصال برئيس القسم.');
-              await auth.signOut();
-              setUser(null);
-              setLoading(false);
-              return;
+              // Check if user was seeded by email
+              try {
+                const q = query(collection(db, 'users'), where('email', '==', fUser.email));
+                const querySnapshot = await getDocs(q);
+                
+                if (!querySnapshot.empty) {
+                  // Link seeded user to this UID
+                  const seededDoc = querySnapshot.docs[0];
+                  const seededData = seededDoc.data();
+                  const username = (fUser.email || seededData.email || '').split('@')[0].toLowerCase();
+                  
+                  userData = {
+                    email: fUser.email || seededData.email,
+                    displayName: fUser.displayName || seededData.displayName || seededData.name || 'مستخدم جديد',
+                    role: seededData.role || 'teacher',
+                    username: username || seededData.username,
+                    isActive: true,
+                    createdAt: seededData.createdAt || new Date().toISOString(),
+                    ...seededData,
+                    uid: fUser.uid,
+                  } as User;
+                  
+                  Object.keys(userData).forEach(key => (userData as any)[key] === undefined && delete (userData as any)[key]);
+                  
+                  await setDoc(userDocRef, userData);
+                  if (username) {
+                    await setDoc(doc(db, 'usernames', username), { email: userData.email, uid: userData.uid });
+                  }
+                } else {
+                  console.warn('Unauthorized access attempt:', fUser.email);
+                  setError('عذراً، هذا البريد الإلكتروني غير مسجل في النظام. يرجى الاتصال برئيس القسم.');
+                  await auth.signOut();
+                  setUser(null);
+                  setLoading(false);
+                  return;
+                }
+              } catch (qErr) {
+                console.error('Error querying user by email:', qErr);
+                throw qErr;
+              }
             }
           }
 
           if (userData) {
             console.log('AuthContext: User data loaded:', userData);
             setUser(userData);
-            if (userData.role === 'admin') {
-              console.log('AuthContext: User is admin, triggering seedInitialData');
-              seedInitialData();
-            }
           }
         } catch (err) {
           console.error('Error loading user profile:', err);

@@ -23,7 +23,7 @@ export async function seedInitialData(force = false, onProgress?: (progress: See
 
     if (force) {
       report('جاري مسح البيانات القديمة...', 5);
-      const collectionsToClear = ['rooms', 'specialties', 'levels', 'modules', 'cycles', 'pedagogicalCalendar', 'settings', 'users'];
+      const collectionsToClear = ['rooms', 'specialties', 'levels', 'modules', 'cycles', 'pedagogicalCalendar', 'settings', 'users', 'examSessions', 'scheduleSessions', 'students', 'projectDrafts', 'projects'];
       for (const coll of collectionsToClear) {
         const snap = await getDocs(collection(db, coll));
         if (snap.empty) continue;

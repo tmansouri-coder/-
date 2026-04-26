@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, writeBatch, query, where } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { Specialty, Cycle, Level, Module, Student } from '../types';
@@ -386,6 +386,17 @@ export default function SpecialtyManagement() {
     }
   };
 
+  const cyclesByName = useMemo(() => {
+    const map = new Map<string, Cycle[]>();
+    cycles.forEach(c => {
+      const existing = map.get(c.name) || [];
+      map.set(c.name, [...existing, c]);
+    });
+    return map;
+  }, [cycles]);
+
+  const uniqueCycleNames = useMemo(() => Array.from(cyclesByName.keys()), [cyclesByName]);
+
   if (loading) return (
     <div className="h-96 flex items-center justify-center">
       <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
@@ -396,8 +407,10 @@ export default function SpecialtyManagement() {
     const matchesSearch = (s.name?.toLowerCase() || '').includes(searchQuery.toLowerCase());
     if (activeCycle === 'all') return matchesSearch;
     
-    // Find levels for this cycle
-    const cycleLevels = levels.filter(l => l.cycleId === activeCycle).map(l => l.id);
+    // Find levels for all cycles with this name
+    const matchingCycles = cyclesByName.get(activeCycle) || [];
+    const matchingCycleIds = matchingCycles.map(c => c.id);
+    const cycleLevels = levels.filter(l => matchingCycleIds.includes(l.cycleId)).map(l => l.id);
     return matchesSearch && cycleLevels.includes(s.levelId);
   });
 
@@ -463,19 +476,19 @@ export default function SpecialtyManagement() {
           <Filter className="w-4 h-4" />
           <span>الكل</span>
         </button>
-        {cycles.map(cycle => (
+        {uniqueCycleNames.map(name => (
           <button
-            key={cycle.id}
-            onClick={() => setActiveCycle(cycle.id)}
+            key={name}
+            onClick={() => setActiveCycle(name)}
             className={cn(
               "flex items-center gap-2 px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-widest transition-all whitespace-nowrap",
-              activeCycle === cycle.id 
+              activeCycle === name 
                 ? "bg-blue-600 text-white shadow-lg shadow-blue-200" 
                 : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
             )}
           >
             <Layers className="w-4 h-4" />
-            <span>{cycle.name}</span>
+            <span>{name}</span>
           </button>
         ))}
       </div>
@@ -483,7 +496,11 @@ export default function SpecialtyManagement() {
       {/* Specialties Grid grouped by Level */}
       <div className="space-y-12">
         {levels
-          .filter(l => activeCycle === 'all' || l.cycleId === activeCycle)
+          .filter(l => {
+            if (activeCycle === 'all') return true;
+            const cycle = cycles.find(c => c.id === l.cycleId);
+            return cycle?.name === activeCycle;
+          })
           .map((level, levelIdx) => {
             const levelSpecs = specialties.filter(s => 
               s.levelId === level.id && 

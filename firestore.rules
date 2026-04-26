@@ -8,7 +8,7 @@ service cloud.firestore {
     
     function isAdmin() {
       return isAuthenticated() && 
-        (request.auth.token.email == 't.mansouri@lagh-univ.dz' ||
+        (request.auth.token.get('email', '').lower() == 't.mansouri@lagh-univ.dz' ||
          (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
           get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'));
     }

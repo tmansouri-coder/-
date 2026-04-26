@@ -127,6 +127,29 @@ export default function Settings() {
           const data = backupData[collName];
           if (!Array.isArray(data)) continue;
 
+          // Clear collection first to prevent duplicates (except users, settings, and usernames to avoid lockouts)
+          if (collName !== 'users' && collName !== 'settings' && collName !== 'usernames' && collectionsToBackup.includes(collName)) {
+            try {
+              const existingDocs = await getDocs(collection(db, collName));
+              if (!existingDocs.empty) {
+                let deleteBatch = writeBatch(db);
+                let deleteCount = 0;
+                for (const d of existingDocs.docs) {
+                  deleteBatch.delete(d.ref);
+                  deleteCount++;
+                  if (deleteCount === 400) {
+                    await deleteBatch.commit();
+                    deleteBatch = writeBatch(db);
+                    deleteCount = 0;
+                  }
+                }
+                if (deleteCount > 0) await deleteBatch.commit();
+              }
+            } catch (clearErr) {
+              console.warn(`Could not clear collection ${collName} before import:`, clearErr);
+            }
+          }
+
           let batch = writeBatch(db);
           let count = 0;
           
@@ -172,12 +195,14 @@ export default function Settings() {
           toast.error('لم يتم العثور على بيانات صالحة في الملف');
         } else {
           toast.success(`تمت عملية الاستيراد بنجاح (${successCount} سجل). جاري تحديث التطبيق...`);
-          setTimeout(() => window.location.reload(), 2000);
+          // Clear local cache if any
+          localStorage.removeItem('last_seed_v2');
+          setTimeout(() => window.location.reload(), 1500);
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error('Import error:', err);
         toast.dismiss(loadingToast);
-        toast.error(`❌ فشل الاستيراد: ${err instanceof Error ? err.message : 'تأكد من صحة الملف'}`);
+        toast.error(`❌ فشل الاستيراد: ${err?.message || 'تأكد من صحة الملف'}`);
       } finally {
         setIsImporting(false);
       }
