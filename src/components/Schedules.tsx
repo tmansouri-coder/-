@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, query, where, setDoc, getDoc, writeBatch, onSnapshot, deleteField } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
@@ -80,7 +80,7 @@ export default function Schedules() {
   const [selectedSpecialty, setSelectedSpecialty] = useState<string>(() => localStorage.getItem('selectedSpecialty') || '');
   const [selectedSemester, setSelectedSemester] = useState<'S1' | 'S2'>(() => (localStorage.getItem('selectedSemester') as 'S1' | 'S2') || 'S1');
   const [selectedRoom, setSelectedRoom] = useState<string>(() => localStorage.getItem('selectedRoom') || '');
-  const [selectedExamType, setSelectedExamType] = useState<'Regular' | 'Resit' | 'All'>('All');
+  const [selectedExamType, setSelectedExamType] = useState<'Regular' | 'Resit' | 'All'>('Regular');
   const [examStartDate, setExamStartDate] = useState<string>('');
   const [examEndDate, setExamEndDate] = useState<string>('');
   const [selectedTeacherId, setSelectedTeacherId] = useState<string>(user?.uid || '');
@@ -158,8 +158,9 @@ export default function Schedules() {
   const [examInvigilators, setExamInvigilators] = useState<string[]>([]);
   const [applyTimeToLevel, setApplyTimeToLevel] = useState(false);
   const [applyRoomsToSpecialty, setApplyRoomsToSpecialty] = useState(false);
+  const [applyOnlyRoomsToSpecialty, setApplyOnlyRoomsToSpecialty] = useState(false);
   const [applyRoomsToLevel, setApplyRoomsToLevel] = useState(false);
-  const [levelExtraExamDates, setLevelExtraExamDates] = useState<Record<string, string[]>>({});
+  const [levelExtraExamDates, setLevelExtraExamDates] = useState<Record<string, string[]>>({}); // Key: levelId_type
   const [promptConfig, setPromptConfig] = useState<{
     show: boolean;
     title: string;
@@ -177,6 +178,13 @@ export default function Schedules() {
   });
   const [promptValue, setPromptValue] = useState('');
   const [appLogo, setAppLogo] = useState<string | null>(localStorage.getItem('appLogo'));
+
+  const getExtraDatesForLevel = useCallback((levelId: string, type: 'Regular' | 'Resit' | 'All') => {
+    const currentType = type === 'All' ? 'Regular' : type;
+    const dateKey = `${levelId}_${currentType}`;
+    // Fallback to legacy key (no suffix) only for Regular if the type-specific key doesn't exist
+    return levelExtraExamDates[dateKey] || (currentType === 'Regular' ? (levelExtraExamDates[levelId] || []) : []);
+  }, [levelExtraExamDates]);
   const [sessionToDelete, setSessionToDelete] = useState<{ id: string, type: 'schedule' | 'exam' } | null>(null);
   const [confirmState, setConfirmState] = useState<{
     show: boolean;
@@ -562,21 +570,28 @@ export default function Schedules() {
     const examSpec = resolveSpecialty(exam.specialtyId);
     for (const other of examSessions) {
       if (other.id === exam.id) continue;
-      if (other.date !== exam.date || other.time !== exam.time) continue;
+      // Conflict only within the same type (Regular or Resit)
+      if (other.type !== exam.type) continue;
+
+      // Module Repetition Check (For Resit: same specialty cannot have same module twice in the whole schedule)
+      if (exam.type === 'Resit' && other.specialtyId === exam.specialtyId && other.moduleId === exam.moduleId) {
+        const module = resolveModule(exam.moduleId);
+        return { type: 'مقياس مكرر', name: module?.name || 'هذا المقياس', isSameTime: false };
+      }
+
+      if (other.date !== exam.date) continue;
       
-      // Specialty/Level conflict
       const otherSpec = resolveSpecialty(other.specialtyId);
-      const examSpec = resolveSpecialty(exam.specialtyId);
-      
       const otherLevel = levels.find(l => l.id === otherSpec?.levelId);
       const examLevel = levels.find(l => l.id === examSpec?.levelId);
-      const otherCycle = cycles.find(c => c.id === otherLevel?.cycleId);
-      const examCycle = cycles.find(c => c.id === examLevel?.cycleId);
-      
-      // If same specialty ID, it's a conflict
-      if (other.specialtyId === exam.specialtyId) {
-        return { type: 'تخصص', name: otherSpec?.name || '' };
+
+      // Only conflict if SAME time AND same specialty
+      if (other.time === exam.time && other.specialtyId === exam.specialtyId) {
+        return { type: 'تخصص', name: otherSpec?.name || '', isSameTime: true };
       }
+
+      // If different times, it's not a conflict for specialty
+      if (other.time !== exam.time) continue;
 
       // If different cycles (by ID or Name), NO conflict even if specialty/level names match
       if (otherLevel && examLevel) {
@@ -596,19 +611,19 @@ export default function Schedules() {
                                  otherLevel.name.toLowerCase().trim() === examLevel.name.toLowerCase().trim();
 
           if (isSameSpecialtyName && isSameLevelName) {
-            return { type: 'تخصص', name: otherSpec?.name || '' };
+            return { type: 'تخصص', name: otherSpec?.name || '', isSameTime: true };
           }
         }
       }
 
-      // Room conflict (only if same semester)
-      if (other.semester === exam.semester && other.moduleId !== exam.moduleId) {
+      // Room conflict (only if same semester) - Ignored for Resit
+      if (exam.type !== 'Resit' && other.semester === exam.semester && other.moduleId !== exam.moduleId) {
         const rooms1 = exam.mode === 'Simple' ? (exam.roomIds || []) : exam.roomAssignments?.map(ra => ra.roomId) || [];
         const rooms2 = other.mode === 'Simple' ? (other.roomIds || []) : other.roomAssignments?.map(ra => ra.roomId) || [];
         const conflictingRoomId = rooms1.find(r => r && rooms2.includes(r));
         if (conflictingRoomId) {
           const room = resolveRoom(conflictingRoomId);
-          return { type: 'قاعة', name: room?.name || '' };
+          return { type: 'قاعة', name: room?.name || '', isSameTime: true };
         }
       }
 
@@ -652,6 +667,9 @@ export default function Schedules() {
 
     const examsToUpdate = sessionsToUse.filter(s => {
       if (s.semester !== selectedSemester || s.academicYear !== selectedYear) return false;
+      // Independence: only update same type (Regular or Resit)
+      if (formExamType && s.type !== formExamType) return false;
+      
       if (scope === 'all') return true;
       if (scope === 'level') {
         const sSpec = specialties.find(spec => spec.id === s.specialtyId);
@@ -673,7 +691,9 @@ export default function Schedules() {
                          (scope === 'level' && resolveSpecialty(s.specialtyId)?.levelId === targetLevelId) ||
                          (s.specialtyId === specId);
           
-          return (isMatch && s.semester === selectedSemester && s.academicYear === selectedYear) 
+          const isTypeMatch = !formExamType || s.type === formExamType;
+
+          return (isMatch && isTypeMatch && s.semester === selectedSemester && s.academicYear === selectedYear) 
             ? { ...s, time: newTime } 
             : s;
         }));
@@ -698,7 +718,8 @@ export default function Schedules() {
     assignments: RoomAssignment[] = [],
     scope: 'specialty' | 'level' = 'specialty',
     invigilators: string[] = [],
-    studentCount: number = 0
+    studentCount: number = 0,
+    skipInvigilators: boolean = false
   ) => {
     if (!isAdmin && !isViceAdmin) return;
     
@@ -707,6 +728,9 @@ export default function Schedules() {
 
     const examsToUpdate = examSessions.filter(s => {
       if (s.semester !== selectedSemester || s.academicYear !== selectedYear) return false;
+      // Independence: only update same type (Regular or Resit)
+      if (formExamType && s.type !== formExamType) return false;
+
       if (scope === 'level') {
         const sSpec = specialties.find(spec => spec.id === s.specialtyId);
         return sSpec?.levelId === targetLevelId;
@@ -721,11 +745,19 @@ export default function Schedules() {
           const updateData: any = { mode };
           if (mode === 'Simple') {
              updateData.roomIds = rooms;
-             updateData.invigilators = invigilators;
+             if (!skipInvigilators) {
+               updateData.invigilators = invigilators;
+             }
              updateData.studentCount = studentCount;
              updateData.roomAssignments = deleteField();
           } else {
-             updateData.roomAssignments = assignments;
+             // In detailed mode, rooms and invigilators are linked in assignments
+             // If skipping invigilators, we strip them from assignments
+             if (skipInvigilators) {
+               updateData.roomAssignments = assignments.map(a => ({ ...a, invigilators: [] }));
+             } else {
+               updateData.roomAssignments = assignments;
+             }
              updateData.roomIds = deleteField();
              updateData.invigilators = deleteField();
           }
@@ -735,7 +767,9 @@ export default function Schedules() {
         
         setExamSessions(prev => prev.map(s => {
           const isMatch = (scope === 'level' && resolveSpecialty(s.specialtyId)?.levelId === targetLevelId) || (s.specialtyId === specId);
-          if (isMatch && s.semester === selectedSemester && s.academicYear === selectedYear) {
+          const isTypeMatch = !formExamType || s.type === formExamType;
+
+          if (isMatch && isTypeMatch && s.semester === selectedSemester && s.academicYear === selectedYear) {
             const updated = { ...s, mode };
             if (mode === 'Simple') {
               updated.roomIds = rooms;
@@ -927,7 +961,22 @@ export default function Schedules() {
       specsIds.includes(s.specialtyId)
     ).map(s => s.date)));
     
-    const extraForLevel = levelExtraExamDates[selectedLevel] || [];
+    let extraForLevel: string[] = [];
+    if (selectedExamType === 'All') {
+      const regKey = `${selectedLevel}_Regular`;
+      const resitKey = `${selectedLevel}_Resit`;
+      const regDates = levelExtraExamDates[regKey] || levelExtraExamDates[selectedLevel] || [];
+      const resitDates = levelExtraExamDates[resitKey] || [];
+      extraForLevel = Array.from(new Set([...regDates, ...resitDates]));
+    } else {
+      const typeKey = selectedExamType;
+      const compositeKey = `${selectedLevel}_${typeKey}`;
+      extraForLevel = levelExtraExamDates[compositeKey] || [];
+      if (typeKey === 'Regular' && extraForLevel.length === 0 && levelExtraExamDates[selectedLevel]) {
+        extraForLevel = levelExtraExamDates[selectedLevel];
+      }
+    }
+    
     return Array.from(new Set([...existingDates, ...extraForLevel])).sort();
   }, [examSessions, selectedSemester, selectedExamType, filteredSpecialties, levelExtraExamDates, selectedLevel, activeTab]);
 
@@ -1498,7 +1547,21 @@ export default function Schedules() {
         current.setDate(current.getDate() + 1);
       }
     } else {
-      const extraForLevel = levelExtraExamDates[selectedLevel] || [];
+      let extraForLevel: string[] = [];
+      if (selectedExamType === 'All') {
+        const regKey = `${selectedLevel}_Regular`;
+        const resitKey = `${selectedLevel}_Resit`;
+        const regDates = levelExtraExamDates[regKey] || levelExtraExamDates[selectedLevel] || [];
+        const resitDates = levelExtraExamDates[resitKey] || [];
+        extraForLevel = Array.from(new Set([...regDates, ...resitDates]));
+      } else {
+        const typeKey = selectedExamType;
+        const compositeKey = `${selectedLevel}_${typeKey}`;
+        extraForLevel = levelExtraExamDates[compositeKey] || [];
+        if (typeKey === 'Regular' && extraForLevel.length === 0 && levelExtraExamDates[selectedLevel]) {
+          extraForLevel = levelExtraExamDates[selectedLevel];
+        }
+      }
       dates = Array.from(new Set([...filteredExams.map(s => s.date), ...extraForLevel])).sort();
     }
 
@@ -1516,19 +1579,28 @@ export default function Schedules() {
     const centerX = pageWidth / 2;
 
     // Calculate optimal cell height to force single page
-    // startY is 35, margins are 5 top/bottom. Available height = pageHeight - 35 - 10
     const availableHeight = pageHeight - 45; 
-    const rowCount = dates.length + 1; // +1 for header
-    const optimalCellHeight = Math.floor(availableHeight / rowCount);
+    
+    // Calculate how many "units" of height are needed. 
+    // Each row needs height proportional to its max number of exams.
+    const rowMaxSessions = dates.map(date => {
+      let maxCount = 1;
+      specs.forEach(spec => {
+        const count = filteredExams.filter(s => s.date === date && s.specialtyId === spec.id).length;
+        if (count > maxCount) maxCount = count;
+      });
+      return maxCount;
+    });
+    
+    const totalUnits = 1 + rowMaxSessions.reduce((a, b) => a + b, 0); // +1 for header
+    const unitHeight = Math.floor(availableHeight / totalUnits);
     
     // Adjust font size based on available space
     let baseFontSize = 7;
+    if (unitHeight < 12) baseFontSize = 6;
+    if (unitHeight < 8) baseFontSize = 5;
     if (format === 'a2') baseFontSize = 10;
     else if (format === 'a3') baseFontSize = 9;
-    else baseFontSize = 8;
-
-    // If rows are very tight, shrink font
-    if (optimalCellHeight < 20) baseFontSize = Math.max(6, baseFontSize - 1);
 
     // Header
     doc.setFont('helvetica', 'bold');
@@ -1640,8 +1712,8 @@ export default function Schedules() {
         valign: 'middle',
         lineWidth: 0.5,
         lineColor: [0, 0, 0],
-        minCellHeight: optimalCellHeight,
-        overflow: 'linebreak',
+        minCellHeight: unitHeight,
+        overflow: 'hidden',
       },
       columnStyles,
       headStyles: {
@@ -1659,6 +1731,10 @@ export default function Schedules() {
         if (data.section === 'body' && data.column.index > 0) {
           const specIdx = data.column.index - 1;
           data.cell.styles.fillColor = SPECIALTY_COLORS[specIdx % SPECIALTY_COLORS.length];
+          const rowIndex = data.row.index;
+          const maxSessionsInRow = rowMaxSessions[rowIndex] || 1;
+          data.cell.styles.minCellHeight = unitHeight * maxSessionsInRow;
+          
           if (Array.isArray(data.cell.raw)) {
             data.cell.text = [];
           }
@@ -1686,19 +1762,25 @@ export default function Schedules() {
             const cellHeight = height / sessions.length;
             
             if (s.mode === 'Simple') {
-              // 1. Module: Center, Bold Black
+              // 1. Time: Top-Left
+              doc.setFont('helvetica', 'bold');
+              doc.setFontSize(baseFontSize - 1);
+              doc.setTextColor(37, 99, 235); // Blue-600
+              doc.text(s.time, x + padding, currentY + padding + 2, { align: 'left' });
+
+              // 2. Module: Center, Bold Black
               doc.setFont('helvetica', 'bold');
               doc.setFontSize(baseFontSize + 2); // Increased size for prominence
               doc.setTextColor(0, 0, 0);
               const splitModule = doc.splitTextToSize(s.module, width - padding * 2);
               doc.text(splitModule, x + width / 2, currentY + cellHeight / 2, { align: 'center', baseline: 'middle' });
               
-              // 2. Invigilators: Top-Right, Black
+              // 3. Invigilators: Top-Right, Black
               doc.setFontSize(baseFontSize - 2);
               doc.setTextColor(0, 0, 0);
               doc.text(s.invigs, x + width - padding, currentY + padding + 2, { align: 'right' });
 
-              // 3. Rooms: Bottom-Left, Black
+              // 4. Rooms: Bottom-Left, Black
               doc.setFont('helvetica', 'bold');
               doc.setTextColor(0, 0, 0);
               doc.text(s.room, x + padding, currentY + cellHeight - padding, { align: 'left', baseline: 'bottom' });
@@ -1706,15 +1788,22 @@ export default function Schedules() {
               if (s.studentCount > 0) {
                 doc.setFontSize(baseFontSize - 2);
                 doc.setTextColor(153, 27, 27); // Dark Red
-                doc.text(`Resit: ${s.studentCount}`, x + padding, currentY + padding + 2, { align: 'left' });
+                // Shift down slightly if time is there
+                doc.text(`Resit: ${s.studentCount}`, x + padding, currentY + padding + 6, { align: 'left' });
               }
             } else {
               // Detailed Mode
+              // Time: Top-Left
+              doc.setFont('helvetica', 'bold');
+              doc.setFontSize(baseFontSize - 1);
+              doc.setTextColor(37, 99, 235); // Blue-600
+              doc.text(s.time, x + padding, currentY + padding + 2, { align: 'left' });
+
               doc.setFont('helvetica', 'bold');
               doc.setFontSize(baseFontSize + 2); // Increased size for prominence
               doc.setTextColor(0, 0, 0);
               const splitModule = doc.splitTextToSize(s.module, width - padding * 2);
-              doc.text(splitModule, x + width / 2, currentY + 8, { align: 'center' });
+              doc.text(splitModule, x + width / 2, currentY + 10, { align: 'center' });
 
               // Position assignments at the bottom: distributed horizontally from bottom-left to right
               const assignmentY = currentY + cellHeight - padding - 1;
@@ -2072,7 +2161,8 @@ export default function Schedules() {
           const levelSpecsIds = specialties.filter(s => s.levelId === selectedLevel).map(s => s.id);
           const examsToDelete = examSessions.filter(s => 
             levelSpecsIds.includes(s.specialtyId) && 
-            s.semester === selectedSemester
+            s.semester === selectedSemester &&
+            (selectedExamType === 'All' || s.type === selectedExamType)
           );
 
           if (examsToDelete.length === 0) {
@@ -2210,6 +2300,14 @@ export default function Schedules() {
         const studentCountToApply = formExamType === 'Resit' ? (examData.studentCount || 0) : 0;
         await handleUpdateRoomsForSpecialty(examSpecialty, roomsToApply, examMode, assignmentsToApply, 'specialty', invigsToApply, studentCountToApply);
       }
+
+      if (applyOnlyRoomsToSpecialty) {
+        const roomsToApply = examMode === 'Simple' ? examRooms : [];
+        const assignmentsToApply = examMode === 'Detailed' ? roomAssignments : [];
+        // When skipping invigilators, we don't pass invigsToApply
+        const studentCountToApply = formExamType === 'Resit' ? (examData.studentCount || 0) : 0;
+        await handleUpdateRoomsForSpecialty(examSpecialty, roomsToApply, examMode, assignmentsToApply, 'specialty', [], studentCountToApply, true);
+      }
       
       if (applyRoomsToLevel) {
         const roomsToApply = examMode === 'Simple' ? examRooms : [];
@@ -2220,6 +2318,7 @@ export default function Schedules() {
       }
 
       setApplyRoomsToSpecialty(false);
+      setApplyOnlyRoomsToSpecialty(false);
       setApplyRoomsToLevel(false);
       setShowAddModal(false);
       setEditingExam(null);
@@ -2323,6 +2422,7 @@ export default function Schedules() {
                 setExamRooms([]);
                 setExamInvigilators([]);
                 setFormTeacherId('');
+                setFormExamType(selectedExamType === 'All' ? 'Regular' : selectedExamType);
                 setShowAddModal(true); 
               }}
               className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-all shadow-lg shadow-blue-100"
@@ -2730,7 +2830,23 @@ export default function Schedules() {
               </thead>
               <tbody>
                 {(() => {
-                  const extraForLevel = levelExtraExamDates[selectedLevel] || [];
+                  let extraForLevel: string[] = [];
+                  const typeKey = selectedExamType === 'All' ? 'Regular' : selectedExamType;
+                  
+                  if (selectedExamType === 'All') {
+                    const regKey = `${selectedLevel}_Regular`;
+                    const resitKey = `${selectedLevel}_Resit`;
+                    const regDates = levelExtraExamDates[regKey] || levelExtraExamDates[selectedLevel] || [];
+                    const resitDates = levelExtraExamDates[resitKey] || [];
+                    extraForLevel = Array.from(new Set([...regDates, ...resitDates]));
+                  } else {
+                    const compositeKey = `${selectedLevel}_${typeKey}`;
+                    extraForLevel = levelExtraExamDates[compositeKey] || [];
+                    if (typeKey === 'Regular' && extraForLevel.length === 0 && levelExtraExamDates[selectedLevel]) {
+                      extraForLevel = levelExtraExamDates[selectedLevel];
+                    }
+                  }
+
                   return currentLevelExamDates.map(date => {
                   const dateObj = new Date(date);
                   const dayName = dateObj.toLocaleDateString('ar-DZ', { weekday: 'long' });
@@ -2774,10 +2890,19 @@ export default function Schedules() {
                                         }
                                       }
                                       
-                                      const newLevelDates = {
-                                        ...levelExtraExamDates,
-                                        [selectedLevel]: (levelExtraExamDates[selectedLevel] || []).filter(d => d !== date)
-                                      };
+                                      const typeKey = selectedExamType === 'All' ? 'Regular' : selectedExamType;
+                                      const compositeKey = `${selectedLevel}_${typeKey}`;
+                                      const newLevelDates = { ...levelExtraExamDates };
+                                      
+                                      // Clean the composite key
+                                      if (newLevelDates[compositeKey]) {
+                                        newLevelDates[compositeKey] = newLevelDates[compositeKey].filter(d => d !== date);
+                                      }
+                                      // If it's a regular session or "All", also clean the legacy key if it exists
+                                      if ((typeKey === 'Regular' || selectedExamType === 'All') && newLevelDates[selectedLevel]) {
+                                        newLevelDates[selectedLevel] = newLevelDates[selectedLevel].filter(d => d !== date);
+                                      }
+                                      
                                       setLevelExtraExamDates(newLevelDates);
                                       await setDoc(doc(db, 'settings', 'examDates'), { levelExtraExamDates: newLevelDates }, { merge: true });
                                     }
@@ -2818,9 +2943,11 @@ export default function Schedules() {
                                             ));
                                           }
 
+                                          const typeKey = selectedExamType === 'All' ? 'Regular' : selectedExamType;
+                                          const compositeKey = `${selectedLevel}_${typeKey}`;
                                           const newLevelDates = {
                                             ...levelExtraExamDates,
-                                            [selectedLevel]: (levelExtraExamDates[selectedLevel] || []).map(d => d === date ? newDate : d)
+                                            [compositeKey]: (levelExtraExamDates[compositeKey] || []).map(d => d === date ? newDate : d)
                                           };
                                           setLevelExtraExamDates(newLevelDates);
                                           await setDoc(doc(db, 'settings', 'examDates'), { levelExtraExamDates: newLevelDates }, { merge: true });
@@ -2869,31 +2996,19 @@ export default function Schedules() {
                             }}
                             onClick={() => {
                               if (!isAdmin && !isViceAdmin) return;
-                              if (sessions.length > 0) {
-                                setEditingExam(sessions[0]);
-                                setExamDate(sessions[0].date);
-                                setExamSpecialty(sessions[0].specialtyId);
-                                setExamLevel(selectedLevel || '');
-                                setExamMode(sessions[0].mode || 'Simple');
-                                setFormExamType(sessions[0].type || 'Regular');
-                                setExamTime(sessions[0].time || '');
-                                setExamModule(sessions[0].moduleId || '');
-                                setExamRooms(sessions[0].roomIds || []);
-                                setExamInvigilators(sessions[0].invigilators || []);
-                                setRoomAssignments(sessions[0].roomAssignments || [{ roomId: '', invigilators: [], groups: [], studentCount: 0 }]);
-                              } else {
-                                setEditingExam(null);
-                                setExamDate(date);
-                                setExamSpecialty(spec.id);
-                                setExamLevel(selectedLevel || '');
-                                setExamMode('Simple');
-                                setFormExamType('Regular');
-                                setExamTime('');
-                                setExamModule('');
-                                setExamRooms([]);
-                                setExamInvigilators([]);
-                                setRoomAssignments([{ roomId: '', invigilators: [], groups: [], studentCount: 0 }]);
-                              }
+                              // If it's a resit or we want to allow multiple, we reset editing exam to null
+                              // but keep the date and specialty.
+                              setEditingExam(null);
+                              setExamDate(date);
+                              setExamSpecialty(spec.id);
+                              setExamLevel(selectedLevel || '');
+                              setExamMode('Simple');
+                              setFormExamType(selectedExamType === 'All' ? 'Regular' : selectedExamType);
+                              setExamTime('');
+                              setExamModule('');
+                              setExamRooms([]);
+                              setExamInvigilators([]);
+                              setRoomAssignments([{ roomId: '', invigilators: [], groups: [], studentCount: 0 }]);
                               setShowAddModal(true);
                             }}
                           >
@@ -2911,6 +3026,20 @@ export default function Schedules() {
 
                                     return (
                                       <div className="relative h-full min-h-[120px] flex flex-col justify-between">
+                                        {/* Top Row: Time & Resit Badge */}
+                                        <div className="absolute top-0 left-0 flex items-center gap-1">
+                                          {exam.time && (
+                                            <div className="text-[10px] font-bold text-white bg-blue-600 px-1.5 py-0.5 rounded border border-blue-700 shadow-sm">
+                                              {exam.time}
+                                            </div>
+                                          )}
+                                          {exam.type === 'Resit' && exam.studentCount && exam.studentCount > 0 && (
+                                            <div className="text-[9px] font-bold text-orange-700 bg-orange-100 px-1.5 py-0.5 rounded border border-orange-200">
+                                              R: {exam.studentCount}
+                                            </div>
+                                          )}
+                                        </div>
+
                                         {/* Teacher: Top Right */}
                                         <div className="absolute top-0 right-0 text-[11px] font-bold text-black text-right max-w-[70%]">
                                           {invigNames}
@@ -2929,12 +3058,6 @@ export default function Schedules() {
                                               {roomNames}
                                             </div>
                                           </div>
-
-                                        {exam.type === 'Resit' && exam.studentCount && exam.studentCount > 0 && (
-                                          <div className="absolute top-0 left-0 text-[9px] font-bold text-orange-700 bg-orange-100 px-1.5 py-0.5 rounded border border-orange-200">
-                                            Resit: {exam.studentCount}
-                                          </div>
-                                        )}
                                       </div>
                                     );
                                   } else {
@@ -2950,6 +3073,20 @@ export default function Schedules() {
                                         {/* Teacher: Top Right (Summary) */}
                                         <div className="absolute top-0 right-0 text-[11px] font-bold text-black text-right max-w-[70%]">
                                           {allInvigNames}
+                                        </div>
+
+                                        {/* Top Row: Time & Resit Badge */}
+                                        <div className="absolute top-0 left-0 flex items-center gap-1">
+                                          {exam.time && (
+                                            <div className="text-[10px] font-bold text-white bg-blue-600 px-1.5 py-0.5 rounded border border-blue-700 shadow-sm">
+                                              {exam.time}
+                                            </div>
+                                          )}
+                                          {exam.type === 'Resit' && exam.studentCount && exam.studentCount > 0 && (
+                                            <div className="text-[9px] font-bold text-orange-700 bg-orange-100 px-1.5 py-0.5 rounded border border-orange-200">
+                                              R: {exam.studentCount}
+                                            </div>
+                                          )}
                                         </div>
 
                                         {/* Module: Center */}
@@ -2994,21 +3131,19 @@ export default function Schedules() {
                                        conflict && "border-red-500 ring-2 ring-red-500/20"
                                      )}
                                      onClick={(e) => {
-                                       if (!isAdmin && !isViceAdmin) return;
                                        e.stopPropagation();
+                                       if (!isAdmin && !isViceAdmin) return;
                                        setEditingExam(exam);
-                                       setExamMode(exam.mode);
-                                       setFormExamType(exam.type);
                                        setExamDate(exam.date);
-                                       setExamTime(exam.time);
                                        setExamSpecialty(exam.specialtyId);
-                                       setExamModule(exam.moduleId);
-                                       if (exam.mode === 'Detailed') {
-                                         setRoomAssignments(exam.roomAssignments || []);
-                                       } else {
-                                         setExamRooms(exam.roomIds || []);
-                                         setExamInvigilators(exam.invigilators || []);
-                                       }
+                                       setExamLevel(selectedLevel || '');
+                                       setExamMode(exam.mode || 'Simple');
+                                       setFormExamType(exam.type || 'Regular');
+                                       setExamTime(exam.time || '');
+                                       setExamModule(exam.moduleId || '');
+                                       setExamRooms(exam.roomIds || []);
+                                       setExamInvigilators(exam.invigilators || []);
+                                       setRoomAssignments(exam.roomAssignments || [{ roomId: '', invigilators: [], groups: [], studentCount: 0 }]);
                                        setShowAddModal(true);
                                      }}
                                    >
@@ -3116,9 +3251,11 @@ export default function Schedules() {
                           type: 'date',
                           onConfirm: async (newDate) => {
                             if (newDate && !isNaN(Date.parse(newDate))) {
-                              const newLevelDates = {
+                              const typeKey = selectedExamType === 'All' ? 'Regular' : selectedExamType;
+                            const compositeKey = `${selectedLevel}_${typeKey}`;
+                            const newLevelDates = {
                                 ...levelExtraExamDates,
-                                [selectedLevel]: [...new Set([...(levelExtraExamDates[selectedLevel] || []), newDate])].sort()
+                                [compositeKey]: [...new Set([...(levelExtraExamDates[compositeKey] || []), newDate])].sort()
                               };
                               setLevelExtraExamDates(newLevelDates);
                               await setDoc(doc(db, 'settings', 'examDates'), { levelExtraExamDates: newLevelDates }, { merge: true });
@@ -3921,16 +4058,35 @@ export default function Schedules() {
                         </div>
 
                         <div className="flex flex-col gap-2 flex-1 w-full">
-                          <div className="flex items-center gap-2 p-3 bg-orange-50 rounded-xl border border-orange-100 w-full">
+                          <div className="flex items-center gap-2 p-3 bg-orange-50 rounded-xl border border-orange-100 w-full text-right underline decoration-orange-300">
                             <input 
                               type="checkbox" 
                               id="applyRoomsToSpecialty"
                               checked={applyRoomsToSpecialty}
-                              onChange={(e) => setApplyRoomsToSpecialty(e.target.checked)}
+                              onChange={(e) => {
+                                setApplyRoomsToSpecialty(e.target.checked);
+                                if (e.target.checked) setApplyOnlyRoomsToSpecialty(false);
+                              }}
                               className="w-4 h-4 text-orange-600 rounded border-slate-300 focus:ring-orange-500"
                             />
                             <label htmlFor="applyRoomsToSpecialty" className="text-[10px] font-bold text-orange-700 cursor-pointer">
                               تعميم القاعات والحراسة على جميع امتحانات التخصص
+                            </label>
+                          </div>
+
+                          <div className="flex items-center gap-2 p-3 bg-orange-50/50 rounded-xl border border-orange-100/50 w-full">
+                            <input 
+                              type="checkbox" 
+                              id="applyOnlyRoomsToSpecialty"
+                              checked={applyOnlyRoomsToSpecialty}
+                              onChange={(e) => {
+                                setApplyOnlyRoomsToSpecialty(e.target.checked);
+                                if (e.target.checked) setApplyRoomsToSpecialty(false);
+                              }}
+                              className="w-4 h-4 text-orange-600 rounded border-slate-300 focus:ring-orange-500"
+                            />
+                            <label htmlFor="applyOnlyRoomsToSpecialty" className="text-[10px] font-bold text-orange-700 cursor-pointer">
+                              تعميم القاعات فقط على جميع امتحانات التخصص
                             </label>
                           </div>
                           
