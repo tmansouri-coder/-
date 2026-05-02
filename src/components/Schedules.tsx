@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, query, where, setDoc, getDoc, writeBatch, onSnapshot } from 'firebase/firestore';
+import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, query, where, setDoc, getDoc, writeBatch, onSnapshot, deleteField } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
@@ -12,7 +12,7 @@ import {
   Plus, Trash2, Edit2, Download, Filter,
   ChevronRight, ChevronLeft, Search, ClipboardList,
   AlertTriangle, Mail, Copy, X, ShieldAlert, ShieldCheck,
-  RefreshCw, FileText
+  RefreshCw, FileText, Share2
 } from 'lucide-react';
 import { cn, mapLevelName } from '../lib/utils';
 import jsPDF from 'jspdf';
@@ -48,7 +48,8 @@ const EXAM_TIMES = [
   '10:00 - 11:30',
   '08:10 - 09:40',
   '11:30 - 13:00',
-  '09:50 - 11:20'
+  '09:50 - 11:20',
+  '12:00 - 13:30'
 ];
 
 import { useTranslation } from 'react-i18next';
@@ -157,6 +158,7 @@ export default function Schedules() {
   const [examInvigilators, setExamInvigilators] = useState<string[]>([]);
   const [applyTimeToLevel, setApplyTimeToLevel] = useState(false);
   const [applyRoomsToSpecialty, setApplyRoomsToSpecialty] = useState(false);
+  const [applyRoomsToLevel, setApplyRoomsToLevel] = useState(false);
   const [levelExtraExamDates, setLevelExtraExamDates] = useState<Record<string, string[]>>({});
   const [promptConfig, setPromptConfig] = useState<{
     show: boolean;
@@ -564,8 +566,39 @@ export default function Schedules() {
       
       // Specialty/Level conflict
       const otherSpec = resolveSpecialty(other.specialtyId);
-      if (other.specialtyId === exam.specialtyId && otherSpec?.levelId === examSpec?.levelId) {
+      const examSpec = resolveSpecialty(exam.specialtyId);
+      
+      const otherLevel = levels.find(l => l.id === otherSpec?.levelId);
+      const examLevel = levels.find(l => l.id === examSpec?.levelId);
+      const otherCycle = cycles.find(c => c.id === otherLevel?.cycleId);
+      const examCycle = cycles.find(c => c.id === examLevel?.cycleId);
+      
+      // If same specialty ID, it's a conflict
+      if (other.specialtyId === exam.specialtyId) {
         return { type: 'تخصص', name: otherSpec?.name || '' };
+      }
+
+      // If different cycles (by ID or Name), NO conflict even if specialty/level names match
+      if (otherLevel && examLevel) {
+        const otherCycleRecord = cycles.find(c => c.id === otherLevel.cycleId);
+        const examCycleRecord = cycles.find(c => c.id === examLevel.cycleId);
+        
+        // Ensure cycles are defined and compared strictly
+        const sameCycleId = otherLevel.cycleId === examLevel.cycleId;
+        const sameCycleName = otherCycleRecord?.name && examCycleRecord?.name && 
+                             otherCycleRecord.name.toLowerCase().trim() === examCycleRecord.name.toLowerCase().trim();
+
+        if (sameCycleId || sameCycleName) {
+          // Same cycle, check if it's effectively the same specialty (by name and level)
+          const isSameSpecialtyName = otherSpec?.name && examSpec?.name && 
+                                     otherSpec.name.toLowerCase().trim() === examSpec.name.toLowerCase().trim();
+          const isSameLevelName = otherLevel?.name && examLevel?.name &&
+                                 otherLevel.name.toLowerCase().trim() === examLevel.name.toLowerCase().trim();
+
+          if (isSameSpecialtyName && isSameLevelName) {
+            return { type: 'تخصص', name: otherSpec?.name || '' };
+          }
+        }
       }
 
       // Room conflict (only if same semester)
@@ -663,7 +696,9 @@ export default function Schedules() {
     rooms: string[], 
     mode: 'Simple' | 'Detailed', 
     assignments: RoomAssignment[] = [],
-    scope: 'specialty' | 'level' = 'specialty'
+    scope: 'specialty' | 'level' = 'specialty',
+    invigilators: string[] = [],
+    studentCount: number = 0
   ) => {
     if (!isAdmin && !isViceAdmin) return;
     
@@ -686,8 +721,13 @@ export default function Schedules() {
           const updateData: any = { mode };
           if (mode === 'Simple') {
              updateData.roomIds = rooms;
+             updateData.invigilators = invigilators;
+             updateData.studentCount = studentCount;
+             updateData.roomAssignments = deleteField();
           } else {
              updateData.roomAssignments = assignments;
+             updateData.roomIds = deleteField();
+             updateData.invigilators = deleteField();
           }
           await updateDoc(examRef, updateData);
         });
@@ -699,15 +739,20 @@ export default function Schedules() {
             const updated = { ...s, mode };
             if (mode === 'Simple') {
               updated.roomIds = rooms;
+              updated.invigilators = invigilators;
+              updated.studentCount = studentCount;
+              delete (updated as any).roomAssignments;
             } else {
               updated.roomAssignments = assignments;
+              delete (updated as any).roomIds;
+              delete (updated as any).invigilators;
             }
             return updated as ExamSession;
           }
           return s;
         }));
         
-        toast.success(scope === 'level' ? 'تم تعميم القاعات على جميع تخصصات المستوى' : 'تم تعميم القاعات على جميع امتحانات التخصص');
+        toast.success(scope === 'level' ? 'تم تعميم القاعات والحراسة على جميع تخصصات المستوى' : 'تم تعميم القاعات والحراسة على جميع امتحانات التخصص');
       }
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, 'examSessions_rooms');
@@ -958,7 +1003,35 @@ export default function Schedules() {
       if (resolveTeacher(other.teacherId)?.uid === resolveTeacher(session.teacherId)?.uid) return true;
 
       // Specialty Conflict
-      if (resolveSpecialty(other.specialtyId)?.id === resolveSpecialty(session.specialtyId)?.id) return true;
+      const otherSpec = resolveSpecialty(other.specialtyId);
+      const sessionSpec = resolveSpecialty(session.specialtyId);
+      
+      const otherLevel = levels.find(l => l.id === otherSpec?.levelId);
+      const sessionLevel = levels.find(l => l.id === sessionSpec?.levelId);
+      const otherCycle = cycles.find(c => c.id === otherLevel?.cycleId);
+      const sessionCycle = cycles.find(c => c.id === sessionLevel?.cycleId);
+      
+      // Direct same specialty ID
+      if (other.specialtyId === session.specialtyId) return true;
+
+      // Only check name matching if in the same cycle
+      if (otherLevel && sessionLevel) {
+        const otherCycleRecord = cycles.find(c => c.id === otherLevel.cycleId);
+        const sessionCycleRecord = cycles.find(c => c.id === sessionLevel.cycleId);
+        
+        const sameCycleId = otherLevel.cycleId === sessionLevel.cycleId;
+        const sameCycleName = otherCycleRecord?.name && sessionCycleRecord?.name && 
+                             otherCycleRecord.name.toLowerCase().trim() === sessionCycleRecord.name.toLowerCase().trim();
+        
+        if (sameCycleId || sameCycleName) {
+          const isSameSpecName = otherSpec?.name && sessionSpec?.name && 
+                                otherSpec.name.toLowerCase().trim() === sessionSpec.name.toLowerCase().trim();
+          const isSameLevelName = otherLevel?.name && sessionLevel?.name &&
+                                 otherLevel.name.toLowerCase().trim() === sessionLevel.name.toLowerCase().trim();
+
+          if (isSameSpecName && isSameLevelName) return true;
+        }
+      }
 
       return false;
     });
@@ -1737,27 +1810,40 @@ export default function Schedules() {
       return;
     }
 
-    const loadingToast = toast.loading('جاري إرسال البريد الإلكتروني...');
+    const loadingToast = toast.loading('جاري تحضير وإرسال البريد الإلكتروني...');
     try {
+      if (!invigilationRef.current) {
+        throw new Error('تعذر العثور على مرجع الجدول');
+      }
+
+      // Capture schedule as image
+      const canvas = await html2canvas(invigilationRef.current, {
+        scale: 2,
+        useCORS: true,
+        logging: false,
+        backgroundColor: '#ffffff'
+      });
+      const imgData = canvas.toDataURL('image/png');
+      const base64Image = imgData.split(',')[1];
+
       const subject = `قائمة الحراسة - ${selectedSemester === 'S1' ? 'السداسي 1' : 'السداسي 2'} - جامعة الأغواط`;
+      const platformLink = `${window.location.origin}/schedules`;
       const html = `
-        <div dir="rtl" style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #334155; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;">
+        <div dir="rtl" style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #334155; max-width: 800px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;">
           <div style="background-color: #ea580c; padding: 24px; text-align: center;">
             <h1 style="color: white; margin: 0; font-size: 20px;">قائمة الحراسة - قسم الهندسة الميكانيكية</h1>
           </div>
-          <div style="padding: 32px; line-height: 1.6;">
+          <div style="padding: 32px; line-height: 1.6; background-color: white;">
             <h2 style="color: #1e293b; margin-top: 0;">مرحباً ${teacher.displayName}،</h2>
-            <p>يرجى الاطلاع على قائمة الحراسة الخاصة بك للموسم الدراسي الحالي:</p>
+            <p>يرجى الاطلاع على صورة قائمة الحراسة الخاصة بك للموسم الدراسي الحالي:</p>
             
+            <div style="margin: 24px 0; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden;">
+              <img src="cid:invigilation_image" style="width: 100%; display: block;" alt="Schedule Image" />
+            </div>
+
             <div style="background-color: #fff7ed; padding: 20px; border-radius: 8px; border: 1px solid #ffedd5; margin: 24px 0;">
               <p style="margin: 8px 0;"><strong>السنة الدراسية:</strong> ${selectedYear}</p>
               <p style="margin: 8px 0;"><strong>السداسي:</strong> ${selectedSemester === 'S1' ? 'الأول' : 'الثاني'}</p>
-            </div>
-            
-            <p>يمكنك عرض التفاصيل الكاملة وتحميل الجدول بصيغة PDF من خلال الرابط أدناه:</p>
-            
-            <div style="text-align: center; margin-top: 32px;">
-              <a href="${window.location.origin}/schedules" style="background-color: #ea580c; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold;">عرض قائمة الحراسة</a>
             </div>
           </div>
           <div style="background-color: #f1f5f9; padding: 16px; text-align: center; font-size: 12px; color: #94a3b8;">
@@ -1766,17 +1852,45 @@ export default function Schedules() {
         </div>
       `;
       
-      console.log('Sending email to:', teacher.email);
+      console.log('Sending email with image to:', teacher.email);
       const response = await fetch('/api/send-email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           to: teacher.email,
           subject,
-          body: `مرحباً ${teacher.displayName}، يرجى الاطلاع على قائمة الحراسة الخاصة بك في المنصة. السنة الدراسية: ${selectedYear}، السداسي: ${selectedSemester}`,
-          html
+          body: `مرحباً ${teacher.displayName}، يرجى الاطلاع على قائمة الحراسة المرفقة. السنة الدراسية: ${selectedYear}، السداسي: ${selectedSemester}`,
+          html,
+          attachments: [
+            {
+              filename: 'invigilation_schedule.png',
+              content: base64Image,
+              encoding: 'base64',
+              cid: 'invigilation_image'
+            }
+          ]
         })
       });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Server error response:', errorText);
+        let errorMessage = 'فشل إرسال البريد الإلكتروني';
+        
+        if (response.status === 413 || errorText.includes('PayloadTooLargeError') || errorText.includes('too large')) {
+          errorMessage = 'حجم البيانات كبير جداً (Payload Too Large). يرجى إبلاغ الإدارة لزيادة السعة.';
+        } else if (errorText.includes('<!DOCTYPE')) {
+          errorMessage = 'خطأ داخلي في الخادم. يرجى المحاولة مرة أخرى.';
+        } else {
+          try {
+            const errorJson = JSON.parse(errorText);
+            errorMessage = errorJson.message || errorMessage;
+          } catch (e) {
+            errorMessage = errorText || errorMessage;
+          }
+        }
+        throw new Error(errorMessage);
+      }
 
       const result = await response.json();
       console.log('Email API response:', result);
@@ -1842,27 +1956,40 @@ export default function Schedules() {
       return;
     }
 
-    const loadingToast = toast.loading('جاري إرسال البريد الإلكتروني...');
+    const loadingToast = toast.loading('جاري تحضير وإرسال البريد الإلكتروني...');
     try {
+      if (!weeklyScheduleRef.current) {
+        throw new Error('تعذر العثور على مرجع الجدول');
+      }
+
+      // Capture schedule as image
+      const canvas = await html2canvas(weeklyScheduleRef.current, {
+        scale: 2,
+        useCORS: true,
+        logging: false,
+        backgroundColor: '#ffffff'
+      });
+      const imgData = canvas.toDataURL('image/png');
+      const base64Image = imgData.split(',')[1];
+
       const subject = `جدول الحصص الأسبوعي - ${selectedSemester === 'S1' ? 'السداسي 1' : 'السداسي 2'} - جامعة الأغواط`;
+      const platformLink = `${window.location.origin}/schedules`;
       const html = `
-        <div dir="rtl" style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #334155; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;">
+        <div dir="rtl" style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #334155; max-width: 800px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;">
           <div style="background-color: #2563eb; padding: 24px; text-align: center;">
             <h1 style="color: white; margin: 0; font-size: 20px;">جدول الحصص الأسبوعي - قسم الهندسة الميكانيكية</h1>
           </div>
-          <div style="padding: 32px; line-height: 1.6;">
+          <div style="padding: 32px; line-height: 1.6; background-color: white;">
             <h2 style="color: #1e293b; margin-top: 0;">مرحباً ${teacher.displayName}،</h2>
-            <p>يرجى الاطلاع على جدول حصصك الأسبوعي المحدث للموسم الدراسي الحالي:</p>
+            <p>يرجى الاطلاع على صورة جدول حصصك الأسبوعي المحدث للموسم الدراسي الحالي:</p>
             
+            <div style="margin: 24px 0; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden;">
+              <img src="cid:weekly_schedule_image" style="width: 100%; display: block;" alt="Weekly Schedule Image" />
+            </div>
+
             <div style="background-color: #eff6ff; padding: 20px; border-radius: 8px; border: 1px solid #dbeafe; margin: 24px 0;">
               <p style="margin: 8px 0;"><strong>السنة الدراسية:</strong> ${selectedYear}</p>
               <p style="margin: 8px 0;"><strong>السداسي:</strong> ${selectedSemester === 'S1' ? 'الأول' : 'الثاني'}</p>
-            </div>
-            
-            <p>يمكنك عرض الجدول الكامل وتحميله بصيغة PDF من خلال الرابط أدناه:</p>
-            
-            <div style="text-align: center; margin-top: 32px;">
-              <a href="${window.location.origin}/schedules" style="background-color: #2563eb; color: white; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold;">عرض الجدول الأسبوعي</a>
             </div>
           </div>
           <div style="background-color: #f1f5f9; padding: 16px; text-align: center; font-size: 12px; color: #94a3b8;">
@@ -1871,17 +1998,45 @@ export default function Schedules() {
         </div>
       `;
       
-      console.log('Sending email to:', teacher.email);
+      console.log('Sending email with image to:', teacher.email);
       const response = await fetch('/api/send-email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           to: teacher.email,
           subject,
-          body: `مرحباً ${teacher.displayName}، يرجى الاطلاع على جدول حصصك الأسبوعي في المنصة. السنة الدراسية: ${selectedYear}، السداسي: ${selectedSemester}`,
-          html
+          body: `مرحباً ${teacher.displayName}، يرجى الاطلاع على جدول حصصك الأسبوعي المرفق. السنة الدراسية: ${selectedYear}، السداسي: ${selectedSemester}`,
+          html,
+          attachments: [
+            {
+              filename: 'weekly_schedule.png',
+              content: base64Image,
+              encoding: 'base64',
+              cid: 'weekly_schedule_image'
+            }
+          ]
         })
       });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Server error response:', errorText);
+        let errorMessage = 'فشل إرسال البريد الإلكتروني';
+        
+        if (response.status === 413 || errorText.includes('PayloadTooLargeError') || errorText.includes('too large')) {
+          errorMessage = 'حجم البيانات كبير جداً (Payload Too Large). يرجى إبلاغ الإدارة لزيادة السعة.';
+        } else if (errorText.includes('<!DOCTYPE')) {
+          errorMessage = 'خطأ داخلي في الخادم. يرجى المحاولة مرة أخرى.';
+        } else {
+          try {
+            const errorJson = JSON.parse(errorText);
+            errorMessage = errorJson.message || errorMessage;
+          } catch (e) {
+            errorMessage = errorText || errorMessage;
+          }
+        }
+        throw new Error(errorMessage);
+      }
 
       const result = await response.json();
       console.log('Email API response:', result);
@@ -2044,6 +2199,28 @@ export default function Schedules() {
         await addDoc(collection(db, 'examSessions'), examData);
       }
 
+      if (applyTimeToLevel && examTime) {
+        await handleUpdateTimeForSpecialty(examSpecialty, examTime, 'level', examSessions);
+      }
+
+      if (applyRoomsToSpecialty) {
+        const roomsToApply = examMode === 'Simple' ? examRooms : [];
+        const assignmentsToApply = examMode === 'Detailed' ? roomAssignments : [];
+        const invigsToApply = examMode === 'Simple' ? examInvigilators : [];
+        const studentCountToApply = formExamType === 'Resit' ? (examData.studentCount || 0) : 0;
+        await handleUpdateRoomsForSpecialty(examSpecialty, roomsToApply, examMode, assignmentsToApply, 'specialty', invigsToApply, studentCountToApply);
+      }
+      
+      if (applyRoomsToLevel) {
+        const roomsToApply = examMode === 'Simple' ? examRooms : [];
+        const assignmentsToApply = examMode === 'Detailed' ? roomAssignments : [];
+        const invigsToApply = examMode === 'Simple' ? examInvigilators : [];
+        const studentCountToApply = formExamType === 'Resit' ? (examData.studentCount || 0) : 0;
+        await handleUpdateRoomsForSpecialty(examSpecialty, roomsToApply, examMode, assignmentsToApply, 'level', invigsToApply, studentCountToApply);
+      }
+
+      setApplyRoomsToSpecialty(false);
+      setApplyRoomsToLevel(false);
       setShowAddModal(false);
       setEditingExam(null);
       setExamDate('');
@@ -2053,17 +2230,6 @@ export default function Schedules() {
       setExamInvigilators([]);
       setApplyTimeToLevel(false);
       setRoomAssignments([{ roomId: '', invigilators: [], groups: [], studentCount: 0 }]);
-
-      if (applyTimeToLevel && examTime) {
-        await handleUpdateTimeForSpecialty(examSpecialty, examTime, 'level', examSessions);
-      }
-
-      if (applyRoomsToSpecialty) {
-        const roomsToApply = examMode === 'Simple' ? examRooms : [];
-        const assignmentsToApply = examMode === 'Detailed' ? roomAssignments : [];
-        await handleUpdateRoomsForSpecialty(examSpecialty, roomsToApply, examMode, assignmentsToApply, 'specialty');
-      }
-      setApplyRoomsToSpecialty(false);
 
       toast.success(editingExam ? 'تم تحديث الامتحان بنجاح' : 'تم إضافة الامتحان بنجاح');
     } catch (err) {
@@ -2772,11 +2938,23 @@ export default function Schedules() {
                                       </div>
                                     );
                                   } else {
+                                    const allInvigNames = Array.from(new Set(
+                                      exam.roomAssignments?.flatMap(ra => ra.invigilators || []) || []
+                                    )).map(id => {
+                                      const t = resolveTeacher(id);
+                                      return formatTeacherName(t?.displayName || id);
+                                    }).filter(Boolean).sort().join(', ') || '';
+
                                     return (
                                       <div className="relative h-full min-h-[120px] flex flex-col justify-between gap-4">
+                                        {/* Teacher: Top Right (Summary) */}
+                                        <div className="absolute top-0 right-0 text-[11px] font-bold text-black text-right max-w-[70%]">
+                                          {allInvigNames}
+                                        </div>
+
                                         {/* Module: Center */}
                                         <div className="flex-1 flex items-center justify-center">
-                                          <div className="font-bold text-sm text-black text-center leading-tight">
+                                          <div className="font-bold text-sm text-black text-center leading-tight mt-4">
                                             {module?.name || 'Unknown Module'}
                                           </div>
                                         </div>
@@ -2839,19 +3017,78 @@ export default function Schedules() {
                                          تضارب {conflict.type}: {conflict.name}
                                        </div>
                                      )}
-                                    <div className="flex justify-end items-start mb-2">
-                                      {(isAdmin || isViceAdmin) && (
-                                        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <div className="flex flex-wrap gap-1 justify-end items-start mb-2">
+                                      {(isAdmin || isViceAdmin || isSpecialtyManager) && (
+                                        <>
+                                          <button 
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              const spec = resolveSpecialty(exam.specialtyId);
+                                              setConfirmState({
+                                                show: true,
+                                                title: 'تعميم القاعات فقط',
+                                                message: `هل تريد تعميم القاعات فقط لهذا الامتحان على جميع امتحانات ${spec?.name}؟ لن يتم تغيير الحراسة.`,
+                                                type: 'warning',
+                                                onConfirm: () => {
+                                                  handleUpdateRoomsForSpecialty(
+                                                    exam.specialtyId,
+                                                    exam.roomIds || [],
+                                                    exam.mode || 'Simple',
+                                                    exam.roomAssignments || [],
+                                                    'specialty',
+                                                    undefined, // Don't update invigilators
+                                                    exam.studentCount || 0
+                                                  );
+                                                  setConfirmState(prev => ({ ...prev, show: false }));
+                                                }
+                                              });
+                                            }}
+                                            className="p-1 px-2 text-emerald-600 hover:bg-emerald-50 rounded-xl transition-colors flex items-center gap-1 border border-emerald-100 bg-emerald-50/30 shadow-sm"
+                                            title="تعميم القاعات فقط على التخصص"
+                                          >
+                                            <Share2 className="w-3 h-3" />
+                                            <span className="text-[10px] font-bold">قاعات فقط</span>
+                                          </button>
+                                          <button 
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              const spec = resolveSpecialty(exam.specialtyId);
+                                              setConfirmState({
+                                                show: true,
+                                                title: 'تعميم القاعات والحراسة',
+                                                message: `هل تريد تعميم القاعات والحراسة لهذا الامتحان على جميع امتحانات ${spec?.name}؟ سيتم نسخ القاعات والحراس المخصصة الآن.`,
+                                                type: 'warning',
+                                                onConfirm: () => {
+                                                  handleUpdateRoomsForSpecialty(
+                                                    exam.specialtyId,
+                                                    exam.roomIds || [],
+                                                    exam.mode || 'Simple',
+                                                    exam.roomAssignments || [],
+                                                    'specialty',
+                                                    exam.invigilators || [],
+                                                    exam.studentCount || 0
+                                                  );
+                                                  setConfirmState(prev => ({ ...prev, show: false }));
+                                                }
+                                              });
+                                            }}
+                                            className="p-1 px-2 text-blue-600 hover:bg-blue-50 rounded-xl transition-colors flex items-center gap-1 border border-blue-100 bg-blue-50/30 shadow-sm"
+                                            title="تعميم الكل على التخصص"
+                                          >
+                                            <Share2 className="w-3 h-3" />
+                                            <span className="text-[10px] font-bold">تعميم شامل</span>
+                                          </button>
                                           <button 
                                             onClick={(e) => {
                                               e.stopPropagation();
                                               setSessionToDelete({ id: exam.id, type: 'exam' });
                                             }} 
-                                            className="p-1.5 text-red-600 hover:bg-red-50 rounded-xl transition-colors"
+                                            className="p-1.5 text-red-600 hover:bg-red-50 rounded-xl transition-colors border border-red-100 bg-red-50/30 shadow-sm"
+                                            title="حذف الامتحان"
                                           >
                                             <Trash2 className="w-3.5 h-3.5" />
                                           </button>
-                                        </div>
+                                        </>
                                       )}
                                     </div>
                                     {renderRoomInfo()}
@@ -3669,33 +3906,48 @@ export default function Schedules() {
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-4">
-                      <div className="flex items-center gap-2 p-3 bg-blue-50 rounded-xl border border-blue-100 flex-1">
-                        <input 
-                          type="checkbox" 
-                          id="applyTimeToLevel"
-                          checked={applyTimeToLevel}
-                          onChange={(e) => setApplyTimeToLevel(e.target.checked)}
-                          className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
-                        />
-                        <label htmlFor="applyTimeToLevel" className="text-xs font-bold text-blue-700 cursor-pointer">
-                          تعميم هذا التوقيت على جميع تخصصات المستوى
-                        </label>
-                      </div>
+                      <div className="flex flex-col md:flex-row items-center gap-4">
+                        <div className="flex items-center gap-2 p-3 bg-blue-50 rounded-xl border border-blue-100 flex-1 w-full">
+                          <input 
+                            type="checkbox" 
+                            id="applyTimeToLevel"
+                            checked={applyTimeToLevel}
+                            onChange={(e) => setApplyTimeToLevel(e.target.checked)}
+                            className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+                          />
+                          <label htmlFor="applyTimeToLevel" className="text-[10px] font-bold text-blue-700 cursor-pointer">
+                            تعميم هذا التوقيت على جميع تخصصات المستوى
+                          </label>
+                        </div>
 
-                      <div className="flex items-center gap-2 p-3 bg-orange-50 rounded-xl border border-orange-100 flex-1">
-                        <input 
-                          type="checkbox" 
-                          id="applyRoomsToSpecialty"
-                          checked={applyRoomsToSpecialty}
-                          onChange={(e) => setApplyRoomsToSpecialty(e.target.checked)}
-                          className="w-4 h-4 text-orange-600 rounded border-slate-300 focus:ring-orange-500"
-                        />
-                        <label htmlFor="applyRoomsToSpecialty" className="text-xs font-bold text-orange-700 cursor-pointer">
-                          تعميم هذه القاعات على جميع أيام امتحانات التخصص
-                        </label>
+                        <div className="flex flex-col gap-2 flex-1 w-full">
+                          <div className="flex items-center gap-2 p-3 bg-orange-50 rounded-xl border border-orange-100 w-full">
+                            <input 
+                              type="checkbox" 
+                              id="applyRoomsToSpecialty"
+                              checked={applyRoomsToSpecialty}
+                              onChange={(e) => setApplyRoomsToSpecialty(e.target.checked)}
+                              className="w-4 h-4 text-orange-600 rounded border-slate-300 focus:ring-orange-500"
+                            />
+                            <label htmlFor="applyRoomsToSpecialty" className="text-[10px] font-bold text-orange-700 cursor-pointer">
+                              تعميم القاعات والحراسة على جميع امتحانات التخصص
+                            </label>
+                          </div>
+                          
+                          <div className="flex items-center gap-2 p-3 bg-amber-50 rounded-xl border border-amber-100 w-full">
+                            <input 
+                              type="checkbox" 
+                              id="applyRoomsToLevel"
+                              checked={applyRoomsToLevel}
+                              onChange={(e) => setApplyRoomsToLevel(e.target.checked)}
+                              className="w-4 h-4 text-amber-600 rounded border-slate-300 focus:ring-amber-500"
+                            />
+                            <label htmlFor="applyRoomsToLevel" className="text-[10px] font-bold text-amber-700 cursor-pointer">
+                              تعميم القاعات والحراسة على جميع تخصصات المستوى
+                            </label>
+                          </div>
+                        </div>
                       </div>
-                    </div>
                   </div>
 
                   {/* Conflict Alert */}

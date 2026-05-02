@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { collection, getDocs, query, where, addDoc, deleteDoc, doc, updateDoc, onSnapshot, orderBy } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { User, CertificateRequest, Project, SessionType, Cycle, Level, Specialty, Module } from '../types';
@@ -32,6 +32,15 @@ export default function Certificates() {
     years: [{ year: '', moduleName: '', type: 'Cours' as SessionType, cycleId: '', levelId: '', specialtyId: '' }]
   });
   const [selectedProjectId, setSelectedProjectId] = useState('');
+
+  const uniqueCycles = useMemo(() => {
+    const seen = new Set();
+    return cycles.filter(c => {
+      if (seen.has(c.name)) return false;
+      seen.add(c.name);
+      return true;
+    });
+  }, [cycles]);
 
   const canApprove = user?.role === 'admin' || user?.role === 'vice_admin';
   const canRequest = user?.role === 'teacher' || user?.role === 'specialty_manager';
@@ -449,7 +458,7 @@ export default function Certificates() {
                                     className="w-full bg-white border-none rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
                                   >
                                     <option value="">اختر الطور...</option>
-                                    {cycles.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                                    {uniqueCycles.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                                   </select>
                                 </div>
                                 <div className="space-y-1">
@@ -468,7 +477,18 @@ export default function Certificates() {
                                     disabled={!item.cycleId}
                                   >
                                     <option value="">اختر المستوى...</option>
-                                    {levels.filter(l => l.cycleId === item.cycleId).map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                                    {(() => {
+                                      const cycle = cycles.find(c => c.id === item.cycleId);
+                                      if (!cycle) return null;
+                                      const matchingCycleIds = cycles.filter(c => c.name === cycle.name).map(c => c.id);
+                                      const matchingLevels = levels.filter(l => matchingCycleIds.includes(l.cycleId));
+                                      const seenLevels = new Set();
+                                      return matchingLevels.filter(l => {
+                                        if (seenLevels.has(l.name)) return false;
+                                        seenLevels.add(l.name);
+                                        return true;
+                                      }).map(l => <option key={l.id} value={l.id}>{l.name}</option>);
+                                    })()}
                                   </select>
                                 </div>
                                 <div className="space-y-1">

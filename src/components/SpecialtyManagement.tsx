@@ -397,6 +397,17 @@ export default function SpecialtyManagement() {
 
   const uniqueCycleNames = useMemo(() => Array.from(cyclesByName.keys()), [cyclesByName]);
 
+  const uniqueLevels = useMemo(() => {
+    const seen = new Set<string>();
+    return levels.filter(l => {
+      const cycle = cycles.find(c => c.id === l.cycleId);
+      const key = `${cycle?.name || 'unknown'}-${l.name}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [levels, cycles]);
+
   if (loading) return (
     <div className="h-96 flex items-center justify-center">
       <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
@@ -437,7 +448,7 @@ export default function SpecialtyManagement() {
           {(isAdmin || isViceAdmin) && (
             <div className="flex items-center gap-2">
               <button 
-                onClick={() => setShowAddModal({ type: 'level', parentId: activeCycle !== 'all' ? activeCycle : undefined })}
+                onClick={() => setShowAddModal({ type: 'level', parentId: activeCycle !== 'all' ? (cycles.find(c => c.name === activeCycle)?.id) : undefined })}
                 className="h-12 px-6 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center gap-2 font-black text-xs uppercase tracking-widest hover:bg-emerald-600 hover:text-white transition-all shadow-sm"
               >
                 <Plus className="w-4 h-4" />
@@ -495,17 +506,26 @@ export default function SpecialtyManagement() {
 
       {/* Specialties Grid grouped by Level */}
       <div className="space-y-12">
-        {levels
+        {uniqueLevels
           .filter(l => {
             if (activeCycle === 'all') return true;
             const cycle = cycles.find(c => c.id === l.cycleId);
             return cycle?.name === activeCycle;
           })
           .map((level, levelIdx) => {
+            // Find all levels that share this same name/cycle-name to merge their specialties
+            const cycle = cycles.find(c => c.id === level.cycleId);
+            const matchingLevels = levels.filter(ll => {
+              const c = cycles.find(cc => cc.id === ll.cycleId);
+              return ll.name === level.name && c?.name === cycle?.name;
+            });
+            const matchingLevelIds = matchingLevels.map(ml => ml.id);
+
             const levelSpecs = specialties.filter(s => 
-              s.levelId === level.id && 
+              matchingLevelIds.includes(s.levelId) && 
               (s.name?.toLowerCase() || '').includes(searchQuery.toLowerCase())
             );
+
 
             // If a specific cycle is selected, show all levels of that cycle even if empty
             // If 'all' cycles are selected, skip levels that have no matching specialties

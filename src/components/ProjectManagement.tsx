@@ -775,7 +775,9 @@ export default function ProjectManagement() {
                       const cycleSpecs = specialties.filter(s => {
                         if (!selectedCycleId) return false;
                         const level = levels.find(l => l.id === s.levelId);
-                        return level && level.cycleId === selectedCycleId;
+                        const selectedCycle = cycles.find(c => c.id === selectedCycleId);
+                        const levelCycle = cycles.find(c => c.id === level?.cycleId);
+                        return level && levelCycle?.name === selectedCycle?.name;
                       });
 
                       // Try filtering for graduating years for better UX

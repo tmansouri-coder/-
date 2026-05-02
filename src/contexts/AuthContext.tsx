@@ -46,6 +46,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               userData.uid = fUser.uid;
             }
           } else {
+            console.log('AuthContext: User doc does not exist for UID:', fUser.uid, 'Searching by email:', fUser.email);
             // Check if we are the bootstrap admin - do this BEFORE querying to avoid permission issues
             if (fUser.email === 't.mansouri@lagh-univ.dz') {
               console.log('AuthContext: Bootstrap admin detected (missing doc)');

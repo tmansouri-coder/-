@@ -14,7 +14,8 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  app.use(express.json());
+  app.use(express.json({ limit: '10mb' }));
+  app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
   // API Routes
   app.post("/api/send-email", async (req, res) => {
@@ -47,6 +48,7 @@ async function startServer() {
         subject,
         text: body,
         html: req.body.html || body,
+        attachments: req.body.attachments || []
       });
       console.log(`[EMAIL SENT] To: ${to}, Subject: ${subject}`);
       res.json({ success: true, message: "Email sent successfully" });
