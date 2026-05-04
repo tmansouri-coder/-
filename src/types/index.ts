@@ -3,8 +3,8 @@ export type Rank = 'Pr' | 'MCA' | 'MCB' | 'MAA' | 'MAB' | 'Vacataire';
 export type EmploymentType = 'internal' | 'external' | 'temporary';
 export type CycleType = 'Licence' | 'Master' | 'Engineer' | 'Doctorate' | 'ليسانس' | 'ماستر' | 'مهندس';
 export type SessionType = 'Cours' | 'TD' | 'TP';
-export type ProjectStatus = 'Proposed' | 'Validated' | 'Distributed' | 'InProgress' | 'Ready' | 'Defended' | 'Completed';
-export type ProjectStage = 'Start' | 'References' | 'Theory' | 'Practical' | 'Writing' | 'Ready';
+export type ProjectStatus = 'Proposed' | 'Distributed' | 'Defended' | 'Completed';
+export type DefensibilityReason = 'Incomplete Practical' | 'Poor Theory' | 'Low Progress' | 'Absence' | 'Technical' | 'Other' | 'لم يكمل الجانب التطبيقي' | 'ضعيف نظريا' | 'غياب متكرر' | 'مشاكل تقنية' | 'أخرى';
 export type ProblemType = 'No Response' | 'Absence' | 'Delay' | 'Technical' | 'Data Lack' | 'Other';
 export type AbandonmentReason = 'No Commitment' | 'Repeated Absence' | 'Interruption' | 'Work Pressure' | 'Administrative' | 'Other';
 
@@ -143,6 +143,9 @@ export interface Project {
   status: ProjectStatus;
   stage: ProjectStage;
   isDecision1275: boolean;
+  isDefensible?: boolean;
+  nonDefensibleReason?: string;
+  assistantSupervisorName?: string;
   academicYear: string;
   fieldVisits?: {
     date: string;

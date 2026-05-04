@@ -6,8 +6,9 @@ import {
   Briefcase, Plus, Search, Filter, Calendar, User as UserIcon, 
   CheckCircle2, Clock, AlertCircle, Trash2, Edit2, ChevronRight,
   FileText, MessageSquare, History, Settings, MoreVertical, X, Users, MapPin,
-  TrendingUp, AlertTriangle, ShieldCheck, Mail, Download, ExternalLink
+  TrendingUp, AlertTriangle, ShieldCheck, Mail, Download, ExternalLink, FileSpreadsheet, Upload
 } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { cn, mapLevelName } from '../lib/utils';
 import { useAuth } from '../contexts/AuthContext';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
@@ -108,6 +109,86 @@ export default function ProjectManagement() {
     }).sort((a, b) => (a.displayName || '').localeCompare(b.displayName || ''));
   }, [teachers]);
 
+  const handleDownloadTemplate = () => {
+    const templateData = [
+      {
+        'عنوان المشروع (Title)': 'مثال: تطبيق ذكاء اصطناعي',
+        'البريد الإلكتروني للمؤطر (Supervisor Email)': 'teacher@univ.dz',
+        'اسم المؤطر المساعد (Assistant Supervisor)': 'أحمد علي',
+        'القرار 1275 (Decision 1275)': 'لا',
+        'التخصص (Specialty)': 'GL',
+        'الطور (Cycle)': 'Master'
+      }
+    ];
+
+    const ws = XLSX.utils.json_to_sheet(templateData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Template');
+    XLSX.writeFile(wb, 'projects_template.xlsx');
+    toast.success('تم تحميل النموذج بنجاح');
+  };
+
+  const handleImportExcel = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      try {
+        const bstr = evt.target?.result;
+        const wb = XLSX.read(bstr, { type: 'binary' });
+        const wsname = wb.SheetNames[0];
+        const ws = wb.Sheets[wsname];
+        const data = XLSX.utils.sheet_to_json(ws) as any[];
+
+        const newProjects: any[] = [];
+        for (const row of data) {
+          const title = row['عنوان المشروع (Title)'] || row['Title'];
+          const supervisorEmail = row['البريد الإلكتروني للمؤطر (Supervisor Email)'] || row['Supervisor Email'];
+          const assistName = row['اسم المؤطر المساعد (Assistant Supervisor)'] || row['Assistant Supervisor'];
+          const is1275 = (row['القرار 1275 (Decision 1275)'] || row['Decision 1275']) === 'نعم' || (row['القرار 1275 (Decision 1275)'] || row['Decision 1275']) === 'Yes';
+          const specName = row['التخصص (Specialty)'] || row['Specialty'];
+          
+          const supervisor = teachers.find(t => t.email === supervisorEmail);
+          const specialty = specialties.find(s => s.name === specName);
+
+          if (title && supervisor && specialty) {
+            newProjects.push({
+              title,
+              supervisorId: supervisor.uid,
+              assistantSupervisorName: assistName || '',
+              isDecision1275: is1275,
+              specialtyId: specialty.id,
+              levelId: specialty.levelId,
+              students: [],
+              status: 'Proposed',
+              progress: 0,
+              academicYear: selectedYear,
+              createdAt: new Date().toISOString(),
+              stage: 'Start',
+              description: '',
+              keywords: []
+            });
+          }
+        }
+
+        if (newProjects.length > 0) {
+          for (const p of newProjects) {
+            await addDoc(collection(db, 'projects'), p);
+          }
+          toast.success(`تم استيراد ${newProjects.length} مشروع بنجاح`);
+          // Refresh page or update state
+          window.location.reload();
+        } else {
+          toast.error('لم يتم العثور على بيانات صالحة للاستيراد');
+        }
+      } catch (err) {
+        toast.error('خطأ أثناء معالجة الملف');
+      }
+    };
+    reader.readAsBinaryString(file);
+  };
+
   const handleAddProject = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
@@ -120,11 +201,12 @@ export default function ProjectManagement() {
       supervisorId: formData.get('supervisorId') as string,
       coSupervisorId: (formData.get('coSupervisorId') as string) || null,
       students: studentsInput ? studentsInput.split(',').map(s => s.trim()) : [],
-      status: 'Proposed' as ProjectStatus,
+      status: (studentsInput && studentsInput.trim().length > 0) ? 'Distributed' : 'Proposed' as ProjectStatus,
       levelId: specialties.find(s => s.id === (formData.get('specialtyId') as string))?.levelId || '',
       progress: 0,
       stage: 'Start' as ProjectStage,
       isDecision1275: formData.get('isDecision1275') === 'on',
+      assistantSupervisorName: formData.get('assistantSupervisorName') as string || '',
       academicYear: selectedYear,
       stages: [
         { name: 'Start', status: 'Completed', date: new Date().toISOString().split('T')[0] },
@@ -286,8 +368,15 @@ export default function ProjectManagement() {
       coSupervisorId: (formData.get('coSupervisorId') as string) || null,
       students: studentsInput ? studentsInput.split(',').map(s => s.trim()) : editingProject.students,
       isDecision1275: formData.get('isDecision1275') === 'on',
+      assistantSupervisorName: formData.get('assistantSupervisorName') as string || '',
+      isDefensible: formData.get('isDefensible') === 'on',
+      nonDefensibleReason: formData.get('nonDefensibleReason') as string || '',
       levelId: specialties.find(s => s.id === (formData.get('specialtyId') as string))?.levelId || editingProject.levelId,
     };
+
+    if (updatedData.status === undefined && updatedData.students && updatedData.students.length > 0 && editingProject.status === 'Proposed') {
+      (updatedData as any).status = 'Distributed';
+    }
 
     try {
       const projectRef = doc(db, 'projects', editingProject.id);
@@ -508,13 +597,29 @@ export default function ProjectManagement() {
           <p className="text-slate-500 font-medium">متابعة مشاريع الليسانس، الماستر، والقرار 1275</p>
         </div>
         <div className="flex flex-wrap items-center gap-4">
-          <button 
-            onClick={() => setShowAddModal(true)}
-            className="btn-primary flex items-center gap-2"
-          >
-            <Plus className="w-5 h-5" />
-            <span>اقتراح مشروع</span>
-          </button>
+          {(isAdmin || isViceAdmin || isSpecialtyManager) && (
+            <div className="flex gap-2">
+              <button 
+                onClick={handleDownloadTemplate}
+                className="bg-white text-slate-600 px-4 py-2 rounded-xl border border-slate-200 flex items-center gap-2 text-sm font-bold shadow-sm hover:bg-slate-50"
+              >
+                <Download className="w-4 h-4" />
+                تحميل النموذج
+              </button>
+              <label className="bg-white text-emerald-600 px-4 py-2 rounded-xl border border-emerald-100 flex items-center gap-2 text-sm font-bold shadow-sm hover:bg-emerald-50 cursor-pointer">
+                <Upload className="w-4 h-4" />
+                استيراد مشاريع
+                <input type="file" className="hidden" accept=".xlsx, .xls" onChange={handleImportExcel} />
+              </label>
+              <button 
+                onClick={() => setShowAddModal(true)}
+                className="btn-primary flex items-center gap-2"
+              >
+                <Plus className="w-5 h-5" />
+                <span>اقتراح مشروع</span>
+              </button>
+            </div>
+          )}
           <div className="bg-white px-5 py-3 rounded-2xl shadow-sm border border-slate-100 flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600">
               <ShieldCheck className="w-6 h-6" />
@@ -577,12 +682,11 @@ export default function ProjectManagement() {
             className="w-full bg-white border border-slate-100 rounded-3xl px-6 py-5 focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 outline-none shadow-sm transition-all text-lg font-black text-slate-700 appearance-none"
           >
             <option value="All">كل الحالات</option>
-            <option value="Proposed">مقترح</option>
-            <option value="Validated">مؤكد</option>
-            <option value="Distributed">موزع</option>
+            <option value="Proposed">موضوع مقترح</option>
+            <option value="Distributed">موضوع موزع</option>
             <option value="InProgress">قيد الإنجاز</option>
-            <option value="Ready">جاهز للمناقشة</option>
             <option value="Defended">تمت المناقشة</option>
+            <option value="Completed">مكتمل</option>
           </select>
         </div>
       </div>
@@ -602,19 +706,22 @@ export default function ProjectManagement() {
                 <div className="flex flex-wrap gap-2">
                   <span className={cn(
                     "px-4 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest shadow-sm",
-                    project.status === 'Proposed' ? "bg-slate-100 text-slate-600" :
-                    project.status === 'Validated' ? "bg-emerald-100 text-emerald-700" :
-                    project.status === 'Distributed' ? "bg-blue-100 text-blue-700" :
+                    project.status === 'Proposed' ? "bg-slate-100 text-slate-600 border border-slate-200" :
+                    project.status === 'Distributed' ? "bg-emerald-100 text-emerald-700 font-bold border border-emerald-200" :
                     project.status === 'InProgress' ? "bg-orange-100 text-orange-700" :
-                    project.status === 'Ready' ? "bg-emerald-100 text-emerald-700" :
-                    "bg-purple-100 text-purple-700"
+                    project.status === 'Defended' ? "bg-purple-100 text-purple-700" :
+                    "bg-emerald-100 text-emerald-700"
                   )}>
-                    {project.status === 'Proposed' ? 'مقترح' :
-                     project.status === 'Validated' ? 'مؤكد' :
-                     project.status === 'Distributed' ? 'موزع' :
+                    {project.status === 'Proposed' ? 'موضوع مقترح' :
+                     project.status === 'Distributed' ? 'موضوع موزع' :
                      project.status === 'InProgress' ? 'قيد الإنجاز' :
-                     project.status === 'Ready' ? 'جاهز' : 'تمت المناقشة'}
+                     project.status === 'Defended' ? 'تمت المناقشة' : 'مكتمل'}
                   </span>
+                  {project.isDefensible === false && (
+                    <span className="px-4 py-1.5 rounded-xl text-[10px] font-black bg-red-100 text-red-700 border border-red-200 uppercase tracking-widest shadow-sm">
+                      غير قابل للمناقشة
+                    </span>
+                  )}
                   {project.isDecision1275 && (
                     <span className="px-4 py-1.5 rounded-xl text-[10px] font-black bg-red-50 text-red-600 border border-red-100 uppercase tracking-widest flex items-center gap-1.5 shadow-sm">
                       <ShieldCheck className="w-3.5 h-3.5" />
@@ -655,7 +762,7 @@ export default function ProjectManagement() {
                       <p className="text-sm font-extrabold text-slate-700">{teachers.find(t => t.uid === project.supervisorId)?.displayName}</p>
                     </div>
                   </div>
-                  {project.coSupervisorId && (
+                  {project.coSupervisorId ? (
                     <div className="space-y-1">
                       <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">المؤطر المساعد</p>
                       <div className="flex items-center gap-2">
@@ -665,7 +772,17 @@ export default function ProjectManagement() {
                         <p className="text-sm font-extrabold text-slate-700">{teachers.find(t => t.uid === project.coSupervisorId)?.displayName}</p>
                       </div>
                     </div>
-                  )}
+                  ) : project.assistantSupervisorName ? (
+                    <div className="space-y-1">
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">مساعد مؤطر</p>
+                      <div className="flex items-center gap-2">
+                        <div className="w-6 h-6 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-slate-400">
+                          <UserIcon className="w-3.5 h-3.5" />
+                        </div>
+                        <p className="text-sm font-extrabold text-slate-700">{project.assistantSupervisorName}</p>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
                 <div className="space-y-3">
                   <div className="space-y-1">
@@ -823,11 +940,15 @@ export default function ProjectManagement() {
                   </select>
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-700">المؤطر المساعد (اختياري)</label>
+                  <label className="text-sm font-bold text-slate-700">المؤطر المساعد (أستاذ من القائمة)</label>
                   <select name="coSupervisorId" className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500">
                     <option key="none" value="">لا يوجد</option>
                     {uniqueTeachersSorted.map(t => <option key={t.uid} value={t.uid}>{t.displayName}</option>)}
                   </select>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-bold text-slate-700">مساعد مؤطر (اسم حر)</label>
+                  <input name="assistantSupervisorName" placeholder="أدخل الاسم إذا لم يكن في القائمة" className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500" />
                 </div>
               </div>
 
@@ -905,11 +1026,15 @@ export default function ProjectManagement() {
                   </select>
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-bold text-slate-700">المؤطر المساعد (اختياري)</label>
+                  <label className="text-sm font-bold text-slate-700">المؤطر المساعد (أستاذ من القائمة)</label>
                   <select name="coSupervisorId" defaultValue={editingProject.coSupervisorId || ''} className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500">
                     <option key="none" value="">لا يوجد</option>
                     {uniqueTeachersSorted.map(t => <option key={t.uid} value={t.uid}>{t.displayName}</option>)}
                   </select>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-bold text-slate-700">مساعد مؤطر (اسم حر)</label>
+                  <input name="assistantSupervisorName" defaultValue={editingProject.assistantSupervisorName} placeholder="أدخل الاسم إذا لم يكن في القائمة" className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500" />
                 </div>
               </div>
 
@@ -925,9 +1050,30 @@ export default function ProjectManagement() {
                 <input name="keywords" defaultValue={editingProject.keywords?.join(', ')} placeholder="AI, IoT, Robotics" className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500" />
               </div>
 
-              <div className="flex items-center gap-3">
-                <input type="checkbox" name="isDecision1275" id="editIsDecision1275" defaultChecked={editingProject.isDecision1275} className="w-5 h-5 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
-                <label htmlFor="editIsDecision1275" className="text-sm font-bold text-slate-700">خاضع للقرار 1275 (مؤسسة ناشئة / براءة اختراع)</label>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-slate-50 p-6 rounded-3xl border border-slate-100">
+                <div className="space-y-2">
+                  <div className="flex items-center gap-3">
+                    <input type="checkbox" name="isDecision1275" id="editIsDecision1275" defaultChecked={editingProject.isDecision1275} className="w-5 h-5 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+                    <label htmlFor="editIsDecision1275" className="text-sm font-bold text-slate-700">خاضع للقرار 1275 (مؤسسة ناشئة / براءة اختراع)</label>
+                  </div>
+                </div>
+                <div className="space-y-4">
+                  <div className="flex items-center gap-3">
+                    <input type="checkbox" name="isDefensible" id="isDefensible" defaultChecked={editingProject.isDefensible} className="w-5 h-5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" />
+                    <label htmlFor="isDefensible" className="text-sm font-bold text-slate-700">قابل للمناقشة (Defensible)</label>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase">في حالة الرفض، اختر السبب:</label>
+                    <select name="nonDefensibleReason" defaultValue={editingProject.nonDefensibleReason || ''} className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-xs">
+                      <option value="">لا يوجد سبب (أو المشروع مقبول)</option>
+                      <option value="لم يكمل الجانب التطبيقي">لم يكمل الجانب التطبيقي</option>
+                      <option value="ضعيف نظريا">ضعيف نظريا</option>
+                      <option value="غياب متكرر">غياب متكرر</option>
+                      <option value="مشاكل تقنية">مشاكل تقنية</option>
+                      <option value="أخرى">أخرى</option>
+                    </select>
+                  </div>
+                </div>
               </div>
 
               <div className="space-y-2">

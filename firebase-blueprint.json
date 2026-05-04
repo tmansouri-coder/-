@@ -87,9 +87,12 @@
         "specialtyId": { "type": "string" },
         "levelId": { "type": "string" },
         "progress": { "type": "number" },
-        "status": { "type": "string", "enum": ["Proposed", "Distributed", "InProgress", "Ready", "Defended"] },
+        "status": { "type": "string", "enum": ["Proposed", "Distributed", "InProgress", "Completed", "Defended"] },
         "stage": { "type": "string", "enum": ["Start", "References", "Theory", "Practical", "Writing", "Ready"] },
         "isDecision1275": { "type": "boolean" },
+        "isDefensible": { "type": "boolean" },
+        "nonDefensibleReason": { "type": "string" },
+        "assistantSupervisorName": { "type": "string" },
         "defenseInfo": {
           "type": "object",
           "properties": {

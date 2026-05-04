@@ -1618,12 +1618,7 @@ export default function Schedules() {
     doc.setFontSize(11);
     doc.text(`Academic Year ${selectedYear} - ${selectedSemester === 'S1' ? 'Semester 1' : 'Semester 2'}`, centerX, 27, { align: 'center' });
 
-    const specHeaders = specs.map(spec => {
-      const specExams = filteredExams.filter(s => s.specialtyId === spec.id);
-      const time = specExams.length > 0 ? specExams[0].time : '';
-      // Make time and specialty more prominent with a gap
-      return time ? `${time}\n\n${spec.name.toUpperCase()}` : spec.name.toUpperCase();
-    });
+    const specHeaders = specs.map(spec => spec.name.toUpperCase());
 
     const SPECIALTY_COLORS = [
       [253, 242, 233], // Peach
@@ -1775,12 +1770,12 @@ export default function Schedules() {
               const splitModule = doc.splitTextToSize(s.module, width - padding * 2);
               doc.text(splitModule, x + width / 2, currentY + cellHeight / 2, { align: 'center', baseline: 'middle' });
               
-              // 3. Invigilators: Top-Right, Black
+              // 2. Invigilators: Top-Right, Black
               doc.setFontSize(baseFontSize - 2);
               doc.setTextColor(0, 0, 0);
               doc.text(s.invigs, x + width - padding, currentY + padding + 2, { align: 'right' });
 
-              // 4. Rooms: Bottom-Left, Black
+              // 3. Rooms: Bottom-Left, Black
               doc.setFont('helvetica', 'bold');
               doc.setTextColor(0, 0, 0);
               doc.text(s.room, x + padding, currentY + cellHeight - padding, { align: 'left', baseline: 'bottom' });
@@ -1788,7 +1783,6 @@ export default function Schedules() {
               if (s.studentCount > 0) {
                 doc.setFontSize(baseFontSize - 2);
                 doc.setTextColor(153, 27, 27); // Dark Red
-                // Shift down slightly if time is there
                 doc.text(`Resit: ${s.studentCount}`, x + padding, currentY + padding + 6, { align: 'left' });
               }
             } else {
@@ -1915,7 +1909,7 @@ export default function Schedules() {
       const imgData = canvas.toDataURL('image/png');
       const base64Image = imgData.split(',')[1];
 
-      const subject = `قائمة الحراسة - ${selectedSemester === 'S1' ? 'السداسي 1' : 'السداسي 2'} - جامعة الأغواط`;
+      const subject = `قائمة الحراسة (${selectedExamType === 'Resit' ? 'الاستدراكي' : 'العادي'}) - ${selectedSemester === 'S1' ? 'السداسي 1' : 'السداسي 2'} - جامعة الأغواط`;
       const platformLink = `${window.location.origin}/schedules`;
       const html = `
         <div dir="rtl" style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #334155; max-width: 800px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;">
@@ -1933,6 +1927,7 @@ export default function Schedules() {
             <div style="background-color: #fff7ed; padding: 20px; border-radius: 8px; border: 1px solid #ffedd5; margin: 24px 0;">
               <p style="margin: 8px 0;"><strong>السنة الدراسية:</strong> ${selectedYear}</p>
               <p style="margin: 8px 0;"><strong>السداسي:</strong> ${selectedSemester === 'S1' ? 'الأول' : 'الثاني'}</p>
+              <p style="margin: 8px 0;"><strong>نوع الدورة:</strong> ${selectedExamType === 'Resit' ? 'الاستدراكية' : 'العادية'}</p>
             </div>
           </div>
           <div style="background-color: #f1f5f9; padding: 16px; text-align: center; font-size: 12px; color: #94a3b8;">
@@ -1948,7 +1943,7 @@ export default function Schedules() {
         body: JSON.stringify({
           to: teacher.email,
           subject,
-          body: `مرحباً ${teacher.displayName}، يرجى الاطلاع على قائمة الحراسة المرفقة. السنة الدراسية: ${selectedYear}، السداسي: ${selectedSemester}`,
+          body: `مرحباً ${teacher.displayName}، يرجى الاطلاع على قائمة الحراسة المرفقة (${selectedExamType === 'Resit' ? 'الاستدراكي' : 'العادي'}). السنة الدراسية: ${selectedYear}، السداسي: ${selectedSemester}`,
           html,
           attachments: [
             {
@@ -2536,7 +2531,7 @@ export default function Schedules() {
             <option value="S2" className="text-slate-900">السداسي الثاني</option>
           </select>
         </div>
-        {activeTab === 'exams' && (
+        {(activeTab === 'exams' || activeTab === 'personal') && (
           <div className="space-y-2">
             <label className="text-xs font-bold text-slate-400 uppercase">نوع الدورة</label>
             <select 
@@ -3604,7 +3599,9 @@ export default function Schedules() {
                   <div className="text-xl font-bold mt-6">
                     استدعاء للأستاذ (ة) الفاضل (ة): {resolveTeacher(selectedTeacherId)?.displayName}
                   </div>
-                  <div className="text-2xl font-bold mt-4 underline">جدول الحراسة - {selectedSemester === 'S1' ? 'السداسي الأول' : 'السداسي الثاني'}</div>
+                  <div className="text-2xl font-bold mt-4 underline">
+                    جدول الحراسة {selectedExamType === 'Resit' ? 'الاستدراكي' : 'العادي'} - {selectedSemester === 'S1' ? 'السداسي الأول' : 'السداسي الثاني'}
+                  </div>
                 </div>
               </div>
 
@@ -3624,7 +3621,10 @@ export default function Schedules() {
                       const isAssigned = s.mode === 'Simple' 
                         ? s.invigilators?.includes(selectedTeacherId || '')
                         : s.roomAssignments?.some(ra => ra.invigilators.includes(selectedTeacherId || ''));
-                      return isAssigned && s.semester === selectedSemester;
+                      
+                      // Filter by semester and exam type (Regular/Resit)
+                      const matchesType = selectedExamType === 'All' ? true : s.type === selectedExamType;
+                      return isAssigned && s.semester === selectedSemester && matchesType;
                     })
                     .sort((a, b) => {
                       const dateComp = (a.date || '').localeCompare(b.date || '');
