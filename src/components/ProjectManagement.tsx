@@ -247,12 +247,7 @@ export default function ProjectManagement() {
 
     // Permission Check
     if (isTeacher && !isAdmin && !isViceAdmin && !isSpecialtyManager) {
-      const allowedStatuses: ProjectStatus[] = ['InProgress', 'Ready', 'Defended'];
-      if (!allowedStatuses.includes(newStatus)) {
-        toast.error('ليس لديك صلاحية لتغيير الحالة إلى هذه القيمة');
-        return;
-      }
-      if (project.status === 'Proposed' || project.status === 'Validated') {
+      if (project.status === 'Proposed') {
         toast.error('يجب انتظار توزيع المشروع أولاً');
         return;
       }
@@ -286,7 +281,7 @@ export default function ProjectManagement() {
     if (!project) return;
 
     if (isTeacher && !isAdmin && !isViceAdmin && !isSpecialtyManager) {
-      if (project.status === 'Proposed' || project.status === 'Validated') {
+      if (project.status === 'Proposed') {
         toast.error('لا يمكن تحديث التقدم قبل توزيع المشروع');
         return;
       }
@@ -308,7 +303,7 @@ export default function ProjectManagement() {
     if (!project) return;
 
     if (isTeacher && !isAdmin && !isViceAdmin && !isSpecialtyManager) {
-      if (project.status === 'Proposed' || project.status === 'Validated') {
+      if (project.status === 'Proposed') {
         toast.error('لا يمكن تحديث المرحلة قبل توزيع المشروع');
         return;
       }
@@ -320,18 +315,6 @@ export default function ProjectManagement() {
       setProjects(prev => prev.map(p => p.id === projectId ? { ...p, stage } : p));
       if (selectedProject?.id === projectId) setSelectedProject({ ...selectedProject, stage });
       toast.success(`تم تحديث المرحلة إلى: ${stage}`);
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `projects/${projectId}`);
-    }
-  };
-
-  const handleValidateProject = async (projectId: string) => {
-    try {
-      const projectRef = doc(db, 'projects', projectId);
-      await updateDoc(projectRef, { status: 'Validated' });
-      setProjects(prev => prev.map(p => p.id === projectId ? { ...p, status: 'Validated' } : p));
-      if (selectedProject?.id === projectId) setSelectedProject({ ...selectedProject, status: 'Validated' });
-      toast.success('تم تأكيد المشروع بنجاح');
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `projects/${projectId}`);
     }
@@ -374,7 +357,7 @@ export default function ProjectManagement() {
       levelId: specialties.find(s => s.id === (formData.get('specialtyId') as string))?.levelId || editingProject.levelId,
     };
 
-    if (updatedData.status === undefined && updatedData.students && updatedData.students.length > 0 && editingProject.status === 'Proposed') {
+    if ((updatedData as any).status === undefined && updatedData.students && updatedData.students.length > 0 && editingProject.status === 'Proposed') {
       (updatedData as any).status = 'Distributed';
     }
 
@@ -1271,34 +1254,24 @@ export default function ProjectManagement() {
                   <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100 space-y-6">
                     <h4 className="font-bold text-slate-900">إدارة الحالة</h4>
                     <div className="space-y-3">
-                      {(isAdmin || isViceAdmin || isSpecialtyManager) && (
+                      {(isAdmin || isViceAdmin || isSpecialtyManager) && selectedProject.status === 'Proposed' && (
                         <div className="flex flex-col gap-2 mb-4">
-                          {selectedProject.status === 'Proposed' && (
+                          <div className="space-y-2">
+                            <input 
+                              id="distribute-students"
+                              placeholder="أدخل أسماء الطلبة مفصولة بفاصلة..."
+                              className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-xs"
+                            />
                             <button 
-                              onClick={() => handleValidateProject(selectedProject.id)}
-                              className="w-full py-2.5 bg-emerald-600 text-white rounded-xl text-sm font-bold hover:bg-emerald-700 transition-all"
+                              onClick={() => {
+                                const input = document.getElementById('distribute-students') as HTMLInputElement;
+                                handleDistributeProject(selectedProject.id, input.value.split(',').map(s => s.trim()).filter(Boolean));
+                              }}
+                              className="w-full py-2.5 bg-blue-600 text-white rounded-xl text-sm font-bold hover:bg-blue-700 transition-all"
                             >
-                              تأكيد المشروع (Validate)
+                              توزيع على الطلبة (Distribute)
                             </button>
-                          )}
-                          {selectedProject.status === 'Validated' && (
-                            <div className="space-y-2">
-                              <input 
-                                id="distribute-students"
-                                placeholder="أدخل أسماء الطلبة مفصولة بفاصلة..."
-                                className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 text-xs"
-                              />
-                              <button 
-                                onClick={() => {
-                                  const input = document.getElementById('distribute-students') as HTMLInputElement;
-                                  handleDistributeProject(selectedProject.id, input.value.split(',').map(s => s.trim()).filter(Boolean));
-                                }}
-                                className="w-full py-2.5 bg-blue-600 text-white rounded-xl text-sm font-bold hover:bg-blue-700 transition-all"
-                              >
-                                توزيع على الطلبة (Distribute)
-                              </button>
-                            </div>
-                          )}
+                          </div>
                         </div>
                       )}
 
@@ -1307,11 +1280,10 @@ export default function ProjectManagement() {
                         onChange={(e) => handleUpdateStatus(selectedProject.id, e.target.value as ProjectStatus)}
                         className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold"
                       >
-                        <option value="Proposed" disabled={isTeacher}>مقترح</option>
-                        <option value="Validated" disabled={isTeacher}>مؤكد</option>
-                        <option value="Distributed" disabled={isTeacher}>موزع</option>
+                        <option value="Proposed" disabled={isTeacher}>موضوع مقترح</option>
+                        <option value="Distributed" disabled={isTeacher}>موضوع موزع</option>
                         <option value="InProgress">قيد الإنجاز</option>
-                        <option value="Ready">جاهز للمناقشة</option>
+                        <option value="Ready" disabled>مكتمل</option>
                         <option value="Defended">تمت المناقشة</option>
                       </select>
                       

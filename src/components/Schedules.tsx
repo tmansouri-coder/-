@@ -12,13 +12,14 @@ import {
   Plus, Trash2, Edit2, Download, Filter,
   ChevronRight, ChevronLeft, Search, ClipboardList,
   AlertTriangle, Mail, Copy, X, ShieldAlert, ShieldCheck,
-  RefreshCw, FileText, Share2
+  RefreshCw, FileText, Share2, FileSpreadsheet, Sparkles, Info
 } from 'lucide-react';
 import { cn, mapLevelName } from '../lib/utils';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import 'jspdf-autotable';
 import html2canvas from 'html2canvas';
+import * as XLSX from 'xlsx';
 import toast from 'react-hot-toast';
 import PDFScheduleImporter from './PDFScheduleImporter';
 
@@ -178,6 +179,11 @@ export default function Schedules() {
   });
   const [promptValue, setPromptValue] = useState('');
   const [appLogo, setAppLogo] = useState<string | null>(localStorage.getItem('appLogo'));
+  const [showSmartInvigilationModal, setShowSmartInvigilationModal] = useState(false);
+  const [smartInvigilators, setSmartInvigilators] = useState<string[]>([]);
+  const [maxInvigilations, setMaxInvigilations] = useState(4);
+  const [invigilatorsPerRoom, setInvigilatorsPerRoom] = useState(2);
+  const [distributingInvigilators, setDistributingInvigilators] = useState(false);
 
   const getExtraDatesForLevel = useCallback((levelId: string, type: 'Regular' | 'Resit' | 'All') => {
     const currentType = type === 'All' ? 'Regular' : type;
@@ -1992,6 +1998,294 @@ export default function Schedules() {
     }
   };
 
+  const exportInvigilationStatsExcel = () => {
+    const data = teachers.map(teacher => {
+      const teacherSessions = examSessions.filter(s => {
+        if (s.semester !== selectedSemester) return false;
+        if (selectedExamType !== 'All' && s.type !== selectedExamType) return false;
+        
+        return s.mode === 'Simple' 
+          ? s.invigilators?.includes(teacher.uid)
+          : s.roomAssignments?.some(ra => ra.invigilators.includes(teacher.uid));
+      });
+
+      return {
+        'اسم الأستاذ': teacher.displayName,
+        'البريد الإلكتروني': teacher.email,
+        'عدد مرات الحراسة': teacherSessions.length,
+        'السداسي': selectedSemester === 'S1' ? 'الأول' : 'الثاني',
+        'نوع الدورة': selectedExamType === 'Resit' ? 'استدراكية' : 'عادية'
+      };
+    }).sort((a, b) => b['عدد مرات الحراسة'] - a['عدد مرات الحراسة']);
+
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'إحصائيات الحراسة');
+    XLSX.writeFile(wb, `Invigilation_Stats_${selectedSemester}_${selectedExamType}.xlsx`);
+    toast.success('تم تصدير إحصائيات الحراسة بنجاح');
+  };
+
+  const runSmartInvigilationDistribution = async () => {
+    if (smartInvigilators.length === 0) {
+      toast.error('الرجاء اختيار الأساتذة أولاً');
+      return;
+    }
+
+    setDistributingInvigilators(true);
+    const batch = writeBatch(db);
+    let updatedCount = 0;
+
+    try {
+      // 1. Get relevant exam sessions
+      const relevantSessions = examSessions.filter(s => {
+        if (s.academicYear !== selectedYear) return false;
+        if (s.semester !== selectedSemester) return false;
+        if (selectedExamType !== 'All' && s.type !== selectedExamType) return false;
+        return true;
+      });
+
+      // 2. Track teacher load and schedule
+      const teacherLoad = new Map<string, number>();
+      const teacherSchedule = new Map<string, Set<string>>(); // userId -> Set of "date-time"
+      
+      smartInvigilators.forEach(id => {
+        teacherLoad.set(id, 0);
+        teacherSchedule.set(id, new Set());
+      });
+
+      // Populate current load (optional - if we want to overwrite, we start from 0)
+      // For this "fresh" distribution, we start from zero load but we should avoid conflicts with EXISTING sessions not in the current distribution if any.
+      // But usually "distribution" is a one-shot thing.
+
+      // 3. Shuffle sessions to distribute more randomly or keep chronological order
+      const sortedSessions = [...relevantSessions].sort((a, b) => {
+        const dateComp = (a.date || '').localeCompare(b.date || '');
+        if (dateComp !== 0) return dateComp;
+        return (a.time || '').localeCompare(b.time || '');
+      });
+
+      for (const session of sortedSessions) {
+        const sessionDateTime = `${session.date}-${session.time}`;
+        
+        let sessionInvigilators: string[] = [];
+        
+        if (session.mode === 'Simple') {
+          const roomCount = session.roomIds?.length || 1;
+          const totalNeeded = roomCount * invigilatorsPerRoom;
+          
+          const assigned: string[] = [];
+          
+          // Find available teachers
+          const availableTeachers = smartInvigilators
+            .filter(id => {
+              const load = teacherLoad.get(id) || 0;
+              const schedule = teacherSchedule.get(id);
+              return load < maxInvigilations && !schedule?.has(sessionDateTime);
+            })
+            .sort((a, b) => (teacherLoad.get(a) || 0) - (teacherLoad.get(b) || 0)); // Prioritize least loaded
+
+          for (let i = 0; i < totalNeeded && i < availableTeachers.length; i++) {
+            const tId = availableTeachers[i];
+            assigned.push(tId);
+            teacherLoad.set(tId, (teacherLoad.get(tId) || 0) + 1);
+            teacherSchedule.get(tId)?.add(sessionDateTime);
+          }
+          
+          if (assigned.length > 0) {
+            batch.update(doc(db, 'examSessions', session.id), {
+              invigilators: assigned
+            });
+            updatedCount++;
+          }
+        } else {
+          // Detailed mode
+          const newAssignments = session.roomAssignments?.map(ra => {
+            const assigned: string[] = [];
+            const availableTeachers = smartInvigilators
+              .filter(id => {
+                const load = teacherLoad.get(id) || 0;
+                const schedule = teacherSchedule.get(id);
+                return load < maxInvigilations && !schedule?.has(sessionDateTime);
+              })
+              .sort((a, b) => (teacherLoad.get(a) || 0) - (teacherLoad.get(b) || 0));
+
+            for (let i = 0; i < invigilatorsPerRoom && i < availableTeachers.length; i++) {
+              const tId = availableTeachers[i];
+              assigned.push(tId);
+              teacherLoad.set(tId, (teacherLoad.get(tId) || 0) + 1);
+              teacherSchedule.get(tId)?.add(sessionDateTime);
+            }
+            return { ...ra, invigilators: assigned };
+          }) || [];
+
+          if (newAssignments.length > 0) {
+            batch.update(doc(db, 'examSessions', session.id), {
+              roomAssignments: newAssignments
+            });
+            updatedCount++;
+          }
+        }
+      }
+
+      await batch.commit();
+      toast.success(`تم توزيع الحراسة بنجاح لـ ${updatedCount} امتحان`);
+      setShowSmartInvigilationModal(false);
+    } catch (err) {
+      console.error('Smart distribution error:', err);
+      toast.error('حدث خطأ أثناء توزيع الحراسة');
+    } finally {
+      setDistributingInvigilators(false);
+    }
+  };
+
+  const exportAllTeachersWeeklySchedulesPDF = async () => {
+    const toastId = toast.loading('جاري تحضير الجداول الأسبوعية لجميع الأساتذة...');
+    try {
+      const pdf = new jsPDF('l', 'mm', 'a4');
+      let isFirstPage = true;
+
+      for (const teacher of teachers) {
+        if (!isFirstPage) {
+          pdf.addPage('a4', 'l');
+        }
+        isFirstPage = false;
+
+        const pageWidth = pdf.internal.pageSize.getWidth();
+        pdf.setFontSize(22);
+        pdf.setTextColor(30, 41, 59);
+        pdf.text('Weekly Class Schedule', pageWidth / 2, 20, { align: 'center' });
+        
+        pdf.setFontSize(16);
+        pdf.setTextColor(71, 85, 105);
+        pdf.text(`Teacher: ${teacher.displayName}`, pageWidth / 2, 30, { align: 'center' });
+        
+        pdf.setFontSize(10);
+        pdf.setTextColor(148, 163, 184);
+        pdf.text(`Semester: ${selectedSemester === 'S1' ? 'Semester 1' : 'Semester 2'} | Academic Year: ${selectedYear}`, pageWidth / 2, 38, { align: 'center' });
+
+        const head = [['Day / Time', ...PERIODS.map(p => `${p}\n${PERIOD_TIMES[p as keyof typeof PERIOD_TIMES]}`)]];
+        const body = DAYS.map(day => {
+          const row: any[] = [day];
+          PERIODS.forEach(period => {
+            const sessions = scheduleSessions.filter(s => 
+              s.day === day && 
+              s.period === period && 
+              s.teacherId === teacher.uid && 
+              s.academicYear === selectedYear && 
+              s.semester === selectedSemester
+            );
+            
+            if (sessions.length > 0) {
+              row.push(sessions.map(s => {
+                if (s.isExternal) return `EXTERNAL: ${s.externalModuleName}`;
+                if (s.isReserved) return `RESERVED: ${s.reservedFor || 'Other'}`;
+                const mod = resolveModule(s.moduleId);
+                const rm = resolveRoom(s.roomId);
+                const spec = resolveSpecialty(s.specialtyId);
+                return `${s.type}: ${mod?.name || 'Unknown'}\n${spec?.name || ''} | ${rm?.name || ''}`;
+              }).join('\n---\n'));
+            } else {
+              row.push('');
+            }
+          });
+          return row;
+        });
+
+        autoTable(pdf, {
+          head,
+          body,
+          startY: 45,
+          theme: 'grid',
+          headStyles: { fillColor: [248, 250, 252], textColor: [15, 23, 42], fontStyle: 'bold', halign: 'center', fontSize: 9 },
+          bodyStyles: { fontSize: 8, halign: 'center', minCellHeight: 20 },
+          styles: { cellPadding: 2 },
+          columnStyles: { 0: { fontStyle: 'bold', fillColor: [248, 250, 252], cellWidth: 25 } }
+        });
+      }
+
+      pdf.save(`Weekly_Schedules_All_${selectedSemester}_${selectedYear}.pdf`);
+      toast.success('تم تحميل الجداول الأسبوعية بنجاح', { id: toastId });
+    } catch (err) {
+      console.error('All Teachers Weekly Export Error:', err);
+      toast.error('فشل تصدير الجداول الأسبوعية', { id: toastId });
+    }
+  };
+
+  const exportAllTeachersInvigilationSchedulesPDF = async () => {
+    const toastId = toast.loading('جاري تحضير جداول الحراسة لجميع الأساتذة...');
+    try {
+      const pdf = new jsPDF('l', 'mm', 'a4');
+      let isFirstPage = true;
+
+      for (const teacher of teachers) {
+        const teacherInvigilations = examSessions.filter(s => {
+          if (s.semester !== selectedSemester) return false;
+          if (selectedExamType !== 'All' && s.type !== selectedExamType) return false;
+          
+          return s.mode === 'Simple' 
+            ? s.invigilators?.includes(teacher.uid)
+            : s.roomAssignments?.some(ra => ra.invigilators.includes(teacher.uid));
+        }).sort((a, b) => {
+          const dateComp = (a.date || '').localeCompare(b.date || '');
+          if (dateComp !== 0) return dateComp;
+          return (a.time || '').localeCompare(b.time || '');
+        });
+
+        if (teacherInvigilations.length === 0) continue;
+
+        if (!isFirstPage) {
+          pdf.addPage('a4', 'l');
+        }
+        isFirstPage = false;
+
+        const pageWidth = pdf.internal.pageSize.getWidth();
+        pdf.setFontSize(22);
+        pdf.setTextColor(30, 41, 59);
+        pdf.text('Invigilation Schedule', pageWidth / 2, 20, { align: 'center' });
+        
+        pdf.setFontSize(16);
+        pdf.setTextColor(71, 85, 105);
+        pdf.text(`Teacher: ${teacher.displayName}`, pageWidth / 2, 30, { align: 'center' });
+        
+        pdf.setFontSize(10);
+        pdf.setTextColor(148, 163, 184);
+        pdf.text(`Semester: ${selectedSemester === 'S1' ? 'Semester 1' : 'Semester 2'} | Academic Year: ${selectedYear}`, pageWidth / 2, 38, { align: 'center' });
+
+        autoTable(pdf, {
+          head: [['Date', 'Time', 'Module', 'Rooms/Assignment']],
+          body: teacherInvigilations.map(inv => {
+            const mod = resolveModule(inv.moduleId);
+            let detail = '';
+            if (inv.mode === 'Simple') {
+              const rms = inv.roomIds?.map(rid => resolveRoom(rid)?.name).filter(Boolean).join(', ');
+              detail = `Room(s): ${rms}`;
+            } else {
+              const assignment = inv.roomAssignments?.find(ra => ra.invigilators.includes(teacher.uid));
+              const rm = resolveRoom(assignment?.roomId || '');
+              detail = `Room: ${rm?.name || ''}`;
+            }
+            return [inv.date || '', inv.time || '', mod?.name || '', detail];
+          }),
+          startY: 45,
+          theme: 'striped',
+          headStyles: { fillColor: [234, 88, 12], textColor: [255, 255, 255], halign: 'center' },
+          bodyStyles: { halign: 'center' }
+        });
+      }
+
+      if (isFirstPage) {
+        toast.error('لا يوجد جداول حراسة للاساتذة في هذه الفترة', { id: toastId });
+        return;
+      }
+
+      pdf.save(`Invigilation_Schedules_All_${selectedSemester}_${selectedYear}.pdf`);
+      toast.success('تم تحميل جداول الحراسة بنجاح', { id: toastId });
+    } catch (err) {
+      console.error('All Teachers Invigilation Export Error:', err);
+      toast.error('فشل تصدير جداول الحراسة', { id: toastId });
+    }
+  };
+
   const exportPersonalWeeklyPDF = async () => {
     if (!weeklyScheduleRef.current) return null;
     
@@ -2395,6 +2689,43 @@ export default function Schedules() {
             <Download className="w-4 h-4" />
             <span>تحميل PDF</span>
           </button>
+          {(isAdmin || isViceAdmin || isSpecialtyManager) && (
+            <>
+              <button 
+                onClick={() => {
+                  setSmartInvigilators(teachers.filter(t => t.employmentType !== 'temporary').map(t => t.uid)); // Default to non-temporary
+                  setShowSmartInvigilationModal(true);
+                }}
+                className="flex items-center gap-2 px-4 py-2 bg-indigo-50 border border-indigo-100 rounded-xl text-indigo-600 hover:bg-indigo-100 transition-all shadow-sm font-bold"
+              >
+                <Sparkles className="w-5 h-5 text-indigo-600" />
+                <span>توزيع ذكي (AI)</span>
+              </button>
+              <button 
+                onClick={exportInvigilationStatsExcel}
+                className="flex items-center gap-2 px-4 py-2 bg-emerald-50 border border-emerald-100 rounded-xl text-emerald-600 hover:bg-emerald-100 transition-all shadow-sm font-bold"
+              >
+                <FileSpreadsheet className="w-5 h-5 text-emerald-600" />
+                <span>إحصائيات الحراسة (Excel)</span>
+              </button>
+              <button 
+                onClick={exportAllTeachersWeeklySchedulesPDF}
+                className="flex items-center gap-2 px-4 py-2 bg-orange-50 border border-orange-100 rounded-xl text-orange-600 hover:bg-orange-100 transition-all shadow-sm font-bold"
+                title="تحميل الجدول الأسبوعي لجميع الأساتذة في ملف واحد"
+              >
+                <Calendar className="w-5 h-5 text-orange-600" />
+                <span>جداول الحصص (PDF)</span>
+              </button>
+              <button 
+                onClick={exportAllTeachersInvigilationSchedulesPDF}
+                className="flex items-center gap-2 px-4 py-2 bg-rose-50 border border-rose-100 rounded-xl text-rose-600 hover:bg-rose-100 transition-all shadow-sm font-bold"
+                title="تحميل جداول الحراسة لجميع الأساتذة في ملف واحد"
+              >
+                <ShieldAlert className="w-5 h-5 text-rose-600" />
+                <span>جداول الحراسة (PDF)</span>
+              </button>
+            </>
+          )}
           {activeTab === 'exams' && (
             <button 
               onClick={() => exportExamPDF(false)}
@@ -4623,6 +4954,169 @@ export default function Schedules() {
           return mapLevelName(l?.name || '', c?.name || '');
         })()}
       />
+    )}
+
+    {/* Smart Invigilation Modal */}
+    {showSmartInvigilationModal && (
+      <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+        <div className="bg-white rounded-[32px] shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+          <div className="p-8 border-b border-slate-100 flex items-center justify-between bg-indigo-600 text-white">
+            <div className="flex items-center gap-3">
+              <div className="p-3 bg-white/10 rounded-2xl">
+                <Sparkles className="w-6 h-6 text-white" />
+              </div>
+              <div>
+                <h2 className="text-2xl font-bold">توزيع الحراسة الذكي (AI)</h2>
+                <p className="text-white/70 text-sm">توزيع آلي عادل للأساتذة على امتحانات {selectedSemester === 'S1' ? 'السداسي الأول' : 'السداسي الثاني'}</p>
+              </div>
+            </div>
+            <button 
+              onClick={() => setShowSmartInvigilationModal(false)}
+              className="p-2 hover:bg-white/10 rounded-xl transition-colors"
+              disabled={distributingInvigilators}
+            >
+              <X className="w-6 h-6" />
+            </button>
+          </div>
+
+          <div className="p-8 overflow-y-auto space-y-8 text-right" dir="rtl">
+            {/* Parameters section */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-6 bg-slate-50 rounded-3xl border border-slate-100">
+              <div className="space-y-3">
+                <label className="text-sm font-bold text-slate-700 block text-right">أقصى عدد حراسات لكل أستاذ</label>
+                <div className="flex items-center gap-3 justify-start flex-row-reverse">
+                  <input 
+                    type="number" 
+                    min="1" 
+                    max="20"
+                    value={maxInvigilations}
+                    onChange={(e) => setMaxInvigilations(parseInt(e.target.value) || 1)}
+                    className="w-24 bg-white border border-slate-200 rounded-xl px-4 py-2 text-center font-bold text-indigo-600"
+                  />
+                  <span className="text-xs text-slate-400 font-bold">توزيع عادل بحيث لا يتجاوز الأستاذ هذا الرقم</span>
+                </div>
+              </div>
+              <div className="space-y-3">
+                <label className="text-sm font-bold text-slate-700 block text-right">عدد الأساتذة في كل قاعة</label>
+                <div className="flex items-center gap-3 justify-start flex-row-reverse">
+                  <input 
+                    type="number" 
+                    min="1" 
+                    max="10"
+                    value={invigilatorsPerRoom}
+                    onChange={(e) => setInvigilatorsPerRoom(parseInt(e.target.value) || 1)}
+                    className="w-24 bg-white border border-slate-200 rounded-xl px-4 py-2 text-center font-bold text-indigo-600"
+                  />
+                  <span className="text-xs text-slate-400 font-bold">عدد الحراس المطلوب لكل قاعة مفردة</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Teacher selection section */}
+            <div className="space-y-4">
+              <div className="flex items-center justify-between flex-row-reverse">
+                <div className="text-right">
+                  <h3 className="font-bold text-slate-900 flex items-center gap-2 justify-end">
+                    <span>اختيار الأساتذة المتاحين ({smartInvigilators.length})</span>
+                    <UserIcon className="w-5 h-5 text-indigo-600" />
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-1">سيتم التوزيع فقط على الأساتذة المختارين أدناه</p>
+                </div>
+                <div className="flex gap-2 flex-row-reverse">
+                  <button 
+                    onClick={() => setSmartInvigilators(teachers.map(t => t.uid))}
+                    className="text-xs font-bold text-indigo-600 hover:underline cursor-pointer"
+                  >
+                    تحديد الكل
+                  </button>
+                  <span className="text-slate-300">|</span>
+                  <button 
+                    onClick={() => setSmartInvigilators([])}
+                    className="text-xs font-bold text-slate-400 hover:underline cursor-pointer"
+                  >
+                    إلغاء التحديد
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-h-[300px] overflow-y-auto p-2 custom-scrollbar" dir="rtl">
+                {teachers
+                  .sort((a, b) => a.displayName.localeCompare(b.displayName))
+                  .map(t => {
+                    const isSelected = smartInvigilators.includes(t.uid);
+                    return (
+                      <label 
+                        key={t.uid}
+                        className={cn(
+                          "flex items-center gap-3 p-3 rounded-2xl border cursor-pointer transition-all flex-row-reverse",
+                          isSelected 
+                            ? "bg-indigo-50 border-indigo-200 shadow-sm" 
+                            : "bg-white border-slate-100 hover:border-indigo-100"
+                        )}
+                      >
+                        <input 
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => {
+                            setSmartInvigilators(prev => 
+                              prev.includes(t.uid) ? prev.filter(id => id !== t.uid) : [...prev, t.uid]
+                            );
+                          }}
+                          className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500"
+                        />
+                        <div className="flex flex-col min-w-0 flex-1 text-right">
+                          <span className="text-sm font-bold text-slate-700 truncate">{t.displayName}</span>
+                          <span className="text-[10px] text-slate-400 truncate">{t.email}</span>
+                        </div>
+                      </label>
+                    );
+                  })}
+              </div>
+            </div>
+
+            {/* Warnings/Info */}
+            <div className="p-6 bg-amber-50 rounded-3xl border border-amber-100 flex items-start gap-4 flex-row-reverse">
+              <Info className="w-6 h-6 text-amber-600 mt-1 flex-shrink-0" />
+              <div className="space-y-2 text-right">
+                <p className="text-sm text-amber-800 font-bold">:تنبيهات هامة قبل البدء</p>
+                <ul className="text-xs text-amber-700 space-y-1 list-disc list-inside">
+                  <li>سيقوم النظام بتجاوز الحراسات القديمة في الجداول الحالية لنفس السداسي والدورة</li>
+                  <li>النظام يضمن عدم تكليف أستاذ بحراستين في نفس الوقت</li>
+                  <li>يتم منح الأولوية للأساتذة الأقل تحميلاً لضمان العدالة في التوزيع</li>
+                  <li>تأكد من أن عدد الأساتذة المختارين كافٍ لتغطية جميع الامتحانات والقاعات</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <div className="p-8 border-t border-slate-100 bg-slate-50 flex gap-4 flex-row-reverse">
+            <button
+              onClick={runSmartInvigilationDistribution}
+              disabled={distributingInvigilators}
+              className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {distributingInvigilators ? (
+                <>
+                  <RefreshCw className="w-5 h-5 animate-spin" />
+                  <span>جاري التوزيع...</span>
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-5 h-5" />
+                  <span>بدء التوزيع الذكي</span>
+                </>
+              )}
+            </button>
+            <button
+              onClick={() => setShowSmartInvigilationModal(false)}
+              disabled={distributingInvigilators}
+              className="px-8 py-4 bg-white text-slate-600 border border-slate-200 rounded-2xl font-bold hover:bg-slate-50 transition-all"
+            >
+              إلغاء
+            </button>
+          </div>
+        </div>
+      </div>
     )}
   </div>
 );

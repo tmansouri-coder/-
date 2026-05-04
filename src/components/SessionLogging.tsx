@@ -4,10 +4,11 @@ import { db, auth, handleFirestoreError, OperationType } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
 import { ScheduleSession, SessionLog, Module, Room, User, PedagogicalCalendar, Cycle, Level, Specialty } from '../types';
-import { CheckCircle2, XCircle, AlertTriangle, Info, Clock, MapPin, BookOpen, Plus, AlertCircle, BarChart2, GraduationCap } from 'lucide-react';
+import { CheckCircle2, XCircle, AlertTriangle, Info, Clock, MapPin, BookOpen, Plus, AlertCircle, BarChart2, GraduationCap, FileSpreadsheet } from 'lucide-react';
 import { cn, isDateExcluded, getDatesForDay } from '../lib/utils';
 import { doc, updateDoc } from 'firebase/firestore';
 import toast from 'react-hot-toast';
+import * as XLSX from 'xlsx';
 import { useTranslation } from 'react-i18next';
 
 export default function SessionLogging() {
@@ -165,6 +166,38 @@ export default function SessionLogging() {
     }
   };
 
+  const exportProgressExcel = () => {
+    const semesterModules = modules.filter(m => m.semester === activeSemester && m.academicYear === selectedYear);
+    
+    const data = semesterModules.map(module => {
+      const specialty = specialties.find(s => s.id === module.specialtyId);
+      const level = levels.find(l => l.id === specialty?.levelId);
+      const cycle = cycles.find(c => c.id === level?.cycleId);
+      const teacher = teachers.find(t => t.uid === module.teacherId);
+
+      return {
+        'السداسي': activeSemester === 'S1' ? 'الأول' : 'الثاني',
+        'الطور': cycle?.name || '',
+        'المستوى': level?.name || '',
+        'التخصص': specialty?.name || '',
+        'المادة': module.name,
+        'الأستاذ': teacher?.displayName || 'غير معين',
+        'نسبة التقدم (%)': module.progress || 0
+      };
+    }).sort((a, b) => {
+      const specA = a['التخصص'] || '';
+      const specB = b['التخصص'] || '';
+      if (specA !== specB) return specA.localeCompare(specB);
+      return a['المادة'].localeCompare(b['المادة']);
+    });
+
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'نسبة تقدم المقاييس');
+    XLSX.writeFile(wb, `Progress_Report_${selectedYear.replace(/\//g, '-')}_${activeSemester}.xlsx`);
+    toast.success('تم تصدير تقرير التقدم بنجاح');
+  };
+
   if (loading) return <div className="p-8 text-center">{t('loading')}</div>;
 
   const getModuleSortInfo = (moduleId: string) => {
@@ -239,6 +272,15 @@ export default function SessionLogging() {
           <h1 className="text-2xl font-bold text-slate-900">{t('session_logging')}</h1>
           <p className="text-slate-500">{t('session_logging_desc')}</p>
         </div>
+        {(isAdmin || isViceAdmin || isSpecialtyManager) && (
+          <button 
+            onClick={exportProgressExcel}
+            className="flex items-center gap-2 px-4 py-2 bg-emerald-50 text-emerald-600 rounded-xl hover:bg-emerald-100 transition-all shadow-sm border border-emerald-100 font-bold"
+          >
+            <FileSpreadsheet className="w-5 h-5" />
+            <span>تصدير نسبة التقدم (Excel)</span>
+          </button>
+        )}
       </div>
 
       <div className="grid grid-cols-1 gap-8">
