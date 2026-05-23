@@ -139,6 +139,9 @@ export default function Schedules() {
   const [isST, setIsST] = useState(false);
   const [isExternal, setIsExternal] = useState(false);
   const [isReserved, setIsReserved] = useState(false);
+  const [isExportingBatch, setIsExportingBatch] = useState(false);
+  const [exportProgress, setExportProgress] = useState(0);
+  const [exportTotal, setExportTotal] = useState(0);
 
   useEffect(() => {
     if (editingSession) {
@@ -187,10 +190,10 @@ export default function Schedules() {
 
   const getExtraDatesForLevel = useCallback((levelId: string, type: 'Regular' | 'Resit' | 'All') => {
     const currentType = type === 'All' ? 'Regular' : type;
-    const dateKey = `${levelId}_${currentType}`;
-    // Fallback to legacy key (no suffix) only for Regular if the type-specific key doesn't exist
-    return levelExtraExamDates[dateKey] || (currentType === 'Regular' ? (levelExtraExamDates[levelId] || []) : []);
-  }, [levelExtraExamDates]);
+    const dateKey = `${levelId}_${selectedSemester}_${currentType}`;
+    // Fallback to older format ${levelId}_${currentType} or legacy ${levelId}
+    return levelExtraExamDates[dateKey] || levelExtraExamDates[`${levelId}_${currentType}`] || (currentType === 'Regular' ? (levelExtraExamDates[levelId] || []) : []);
+  }, [levelExtraExamDates, selectedSemester]);
   const [sessionToDelete, setSessionToDelete] = useState<{ id: string, type: 'schedule' | 'exam' } | null>(null);
   const [confirmState, setConfirmState] = useState<{
     show: boolean;
@@ -576,6 +579,10 @@ export default function Schedules() {
     const examSpec = resolveSpecialty(exam.specialtyId);
     for (const other of examSessions) {
       if (other.id === exam.id) continue;
+      // Conflict only in the same semester
+      const examSemester = exam.semester || selectedSemester;
+      if (other.semester !== examSemester) continue;
+      
       // Conflict only within the same type (Regular or Resit)
       if (other.type !== exam.type) continue;
 
@@ -671,10 +678,12 @@ export default function Schedules() {
     const targetLevelId = targetSpec?.levelId;
     const sessionsToUse = currentSessions || examSessions;
 
+    const activeExamType = showAddModal ? formExamType : (selectedExamType === 'All' ? 'Regular' : selectedExamType);
+
     const examsToUpdate = sessionsToUse.filter(s => {
       if (s.semester !== selectedSemester || s.academicYear !== selectedYear) return false;
       // Independence: only update same type (Regular or Resit)
-      if (formExamType && s.type !== formExamType) return false;
+      if (activeExamType && s.type !== activeExamType) return false;
       
       if (scope === 'all') return true;
       if (scope === 'level') {
@@ -697,7 +706,7 @@ export default function Schedules() {
                          (scope === 'level' && resolveSpecialty(s.specialtyId)?.levelId === targetLevelId) ||
                          (s.specialtyId === specId);
           
-          const isTypeMatch = !formExamType || s.type === formExamType;
+          const isTypeMatch = !activeExamType || s.type === activeExamType;
 
           return (isMatch && isTypeMatch && s.semester === selectedSemester && s.academicYear === selectedYear) 
             ? { ...s, time: newTime } 
@@ -792,7 +801,10 @@ export default function Schedules() {
           return s;
         }));
         
-        toast.success(scope === 'level' ? 'تم تعميم القاعات والحراسة على جميع تخصصات المستوى' : 'تم تعميم القاعات والحراسة على جميع امتحانات التخصص');
+        const successMsg = skipInvigilators 
+          ? (scope === 'level' ? 'تم تعميم القاعات فقط على جميع تخصصات المستوى' : 'تم تعميم القاعات فقط على جميع امتحانات التخصص')
+          : (scope === 'level' ? 'تم تعميم القاعات والحراسة على جميع تخصصات المستوى' : 'تم تعميم القاعات والحراسة على جميع امتحانات التخصص');
+        toast.success(successMsg);
       }
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, 'examSessions_rooms');
@@ -969,15 +981,15 @@ export default function Schedules() {
     
     let extraForLevel: string[] = [];
     if (selectedExamType === 'All') {
-      const regKey = `${selectedLevel}_Regular`;
-      const resitKey = `${selectedLevel}_Resit`;
-      const regDates = levelExtraExamDates[regKey] || levelExtraExamDates[selectedLevel] || [];
-      const resitDates = levelExtraExamDates[resitKey] || [];
+      const regKey = `${selectedLevel}_${selectedSemester}_Regular`;
+      const resitKey = `${selectedLevel}_${selectedSemester}_Resit`;
+      const regDates = levelExtraExamDates[regKey] || levelExtraExamDates[`${selectedLevel}_Regular`] || levelExtraExamDates[selectedLevel] || [];
+      const resitDates = levelExtraExamDates[resitKey] || levelExtraExamDates[`${selectedLevel}_Resit`] || [];
       extraForLevel = Array.from(new Set([...regDates, ...resitDates]));
     } else {
       const typeKey = selectedExamType;
-      const compositeKey = `${selectedLevel}_${typeKey}`;
-      extraForLevel = levelExtraExamDates[compositeKey] || [];
+      const compositeKey = `${selectedLevel}_${selectedSemester}_${typeKey}`;
+      extraForLevel = levelExtraExamDates[compositeKey] || levelExtraExamDates[`${selectedLevel}_${typeKey}`] || [];
       if (typeKey === 'Regular' && extraForLevel.length === 0 && levelExtraExamDates[selectedLevel]) {
         extraForLevel = levelExtraExamDates[selectedLevel];
       }
@@ -1555,15 +1567,15 @@ export default function Schedules() {
     } else {
       let extraForLevel: string[] = [];
       if (selectedExamType === 'All') {
-        const regKey = `${selectedLevel}_Regular`;
-        const resitKey = `${selectedLevel}_Resit`;
-        const regDates = levelExtraExamDates[regKey] || levelExtraExamDates[selectedLevel] || [];
-        const resitDates = levelExtraExamDates[resitKey] || [];
+        const regKey = `${selectedLevel}_${selectedSemester}_Regular`;
+        const resitKey = `${selectedLevel}_${selectedSemester}_Resit`;
+        const regDates = levelExtraExamDates[regKey] || levelExtraExamDates[`${selectedLevel}_Regular`] || levelExtraExamDates[selectedLevel] || [];
+        const resitDates = levelExtraExamDates[resitKey] || levelExtraExamDates[`${selectedLevel}_Resit`] || [];
         extraForLevel = Array.from(new Set([...regDates, ...resitDates]));
       } else {
         const typeKey = selectedExamType;
-        const compositeKey = `${selectedLevel}_${typeKey}`;
-        extraForLevel = levelExtraExamDates[compositeKey] || [];
+        const compositeKey = `${selectedLevel}_${selectedSemester}_${typeKey}`;
+        extraForLevel = levelExtraExamDates[compositeKey] || levelExtraExamDates[`${selectedLevel}_${typeKey}`] || [];
         if (typeKey === 'Regular' && extraForLevel.length === 0 && levelExtraExamDates[selectedLevel]) {
           extraForLevel = levelExtraExamDates[selectedLevel];
         }
@@ -2139,150 +2151,154 @@ export default function Schedules() {
   };
 
   const exportAllTeachersWeeklySchedulesPDF = async () => {
-    const toastId = toast.loading('جاري تحضير الجداول الأسبوعية لجميع الأساتذة...');
+    const originalTeacherId = selectedTeacherId;
+    const teachersList = [...teachers].sort((a, b) => a.displayName.localeCompare(b.displayName));
+    
+    setIsExportingBatch(true);
+    setExportTotal(teachersList.length);
+    setExportProgress(0);
+    const toastId = toast.loading('جاري تحضير الجداول الأسبوعية (PDF)...');
+    
+    const pdf = new jsPDF('l', 'mm', 'a4');
+    const pdfWidth = pdf.internal.pageSize.getWidth();
+    const pdfHeight = pdf.internal.pageSize.getHeight();
+
     try {
-      const pdf = new jsPDF('l', 'mm', 'a4');
-      let isFirstPage = true;
-
-      for (const teacher of teachers) {
-        if (!isFirstPage) {
-          pdf.addPage('a4', 'l');
-        }
-        isFirstPage = false;
-
-        const pageWidth = pdf.internal.pageSize.getWidth();
-        pdf.setFontSize(22);
-        pdf.setTextColor(30, 41, 59);
-        pdf.text('Weekly Class Schedule', pageWidth / 2, 20, { align: 'center' });
+      for (let i = 0; i < teachersList.length; i++) {
+        const teacher = teachersList[i];
+        setExportProgress(i + 1);
+        setSelectedTeacherId(teacher.uid);
         
-        pdf.setFontSize(16);
-        pdf.setTextColor(71, 85, 105);
-        pdf.text(`Teacher: ${teacher.displayName}`, pageWidth / 2, 30, { align: 'center' });
+        // Wait for React to re-render
+        await new Promise(resolve => setTimeout(resolve, 400));
         
-        pdf.setFontSize(10);
-        pdf.setTextColor(148, 163, 184);
-        pdf.text(`Semester: ${selectedSemester === 'S1' ? 'Semester 1' : 'Semester 2'} | Academic Year: ${selectedYear}`, pageWidth / 2, 38, { align: 'center' });
-
-        const head = [['Day / Time', ...PERIODS.map(p => `${p}\n${PERIOD_TIMES[p as keyof typeof PERIOD_TIMES]}`)]];
-        const body = DAYS.map(day => {
-          const row: any[] = [day];
-          PERIODS.forEach(period => {
-            const sessions = scheduleSessions.filter(s => 
-              s.day === day && 
-              s.period === period && 
-              s.teacherId === teacher.uid && 
-              s.academicYear === selectedYear && 
-              s.semester === selectedSemester
-            );
-            
-            if (sessions.length > 0) {
-              row.push(sessions.map(s => {
-                if (s.isExternal) return `EXTERNAL: ${s.externalModuleName}`;
-                if (s.isReserved) return `RESERVED: ${s.reservedFor || 'Other'}`;
-                const mod = resolveModule(s.moduleId);
-                const rm = resolveRoom(s.roomId);
-                const spec = resolveSpecialty(s.specialtyId);
-                return `${s.type}: ${mod?.name || 'Unknown'}\n${spec?.name || ''} | ${rm?.name || ''}`;
-              }).join('\n---\n'));
-            } else {
-              row.push('');
-            }
+        if (weeklyScheduleRef.current) {
+          const canvas = await html2canvas(weeklyScheduleRef.current, {
+            scale: 1.5, // Slightly lower scale for batch to avoid memory issues
+            useCORS: true,
+            logging: false,
+            backgroundColor: '#ffffff'
           });
-          return row;
-        });
-
-        autoTable(pdf, {
-          head,
-          body,
-          startY: 45,
-          theme: 'grid',
-          headStyles: { fillColor: [248, 250, 252], textColor: [15, 23, 42], fontStyle: 'bold', halign: 'center', fontSize: 9 },
-          bodyStyles: { fontSize: 8, halign: 'center', minCellHeight: 20 },
-          styles: { cellPadding: 2 },
-          columnStyles: { 0: { fontStyle: 'bold', fillColor: [248, 250, 252], cellWidth: 25 } }
-        });
+          
+          const imgData = canvas.toDataURL('image/png');
+          const ratio = Math.min(pdfWidth / canvas.width, pdfHeight / canvas.height);
+          const width = canvas.width * ratio;
+          const height = canvas.height * ratio;
+          const x = (pdfWidth - width) / 2;
+          const y = (pdfHeight - height) / 2;
+          
+          if (i > 0) pdf.addPage('a4', 'l');
+          pdf.addImage(imgData, 'PNG', x, y, width, height);
+        }
       }
-
       pdf.save(`Weekly_Schedules_All_${selectedSemester}_${selectedYear}.pdf`);
-      toast.success('تم تحميل الجداول الأسبوعية بنجاح', { id: toastId });
+      toast.success('تم تحميل الجداول بنجاح', { id: toastId });
     } catch (err) {
-      console.error('All Teachers Weekly Export Error:', err);
-      toast.error('فشل تصدير الجداول الأسبوعية', { id: toastId });
+      console.error('Batch Weekly Export Error:', err);
+      toast.error('فشل تصدير الجداول', { id: toastId });
+    } finally {
+      setSelectedTeacherId(originalTeacherId);
+      setIsExportingBatch(false);
     }
   };
 
   const exportAllTeachersInvigilationSchedulesPDF = async () => {
-    const toastId = toast.loading('جاري تحضير جداول الحراسة لجميع الأساتذة...');
+    const originalTeacherId = selectedTeacherId;
+    
+    // Filter teachers who actually have invigilations
+    const teachersWithInvigilation = teachers.filter(teacher => {
+      return examSessions.some(s => {
+        if (s.semester !== selectedSemester) return false;
+        if (selectedExamType !== 'All' && s.type !== selectedExamType) return false;
+        return s.mode === 'Simple' 
+          ? s.invigilators?.includes(teacher.uid)
+          : s.roomAssignments?.some(ra => ra.invigilators.includes(teacher.uid));
+      });
+    }).sort((a, b) => a.displayName.localeCompare(b.displayName));
+
+    if (teachersWithInvigilation.length === 0) {
+      toast.error('لا يوجد جداول حراسة للاساتذة في هذه الفترة');
+      return;
+    }
+
+    setIsExportingBatch(true);
+    setExportTotal(teachersWithInvigilation.length);
+    setExportProgress(0);
+    const toastId = toast.loading('جاري تحضير جداول الحراسة (PDF)...');
+    
+    const pdf = new jsPDF('p', 'mm', 'a4'); 
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const midPoint = pageHeight / 2;
+
     try {
-      const pdf = new jsPDF('l', 'mm', 'a4');
-      let isFirstPage = true;
+      let currentSlot: 'top' | 'bottom' = 'top';
 
-      for (const teacher of teachers) {
-        const teacherInvigilations = examSessions.filter(s => {
-          if (s.semester !== selectedSemester) return false;
-          if (selectedExamType !== 'All' && s.type !== selectedExamType) return false;
+      for (let i = 0; i < teachersWithInvigilation.length; i++) {
+        const teacher = teachersWithInvigilation[i];
+        setExportProgress(i + 1);
+        setSelectedTeacherId(teacher.uid);
+        
+        // Wait for React to re-render
+        await new Promise(resolve => setTimeout(resolve, 400));
+        
+        if (invigilationRef.current) {
+          const canvas = await html2canvas(invigilationRef.current, {
+            scale: 1.5,
+            useCORS: true,
+            logging: false,
+            backgroundColor: '#ffffff'
+          });
           
-          return s.mode === 'Simple' 
-            ? s.invigilators?.includes(teacher.uid)
-            : s.roomAssignments?.some(ra => ra.invigilators.includes(teacher.uid));
-        }).sort((a, b) => {
-          const dateComp = (a.date || '').localeCompare(b.date || '');
-          if (dateComp !== 0) return dateComp;
-          return (a.time || '').localeCompare(b.time || '');
-        });
+          const imgData = canvas.toDataURL('image/png');
+          
+          if (i > 0 && currentSlot === 'top') {
+            currentSlot = 'bottom';
+          } else if (i > 0 && currentSlot === 'bottom') {
+            pdf.addPage('a4', 'p');
+            currentSlot = 'top';
+          }
 
-        if (teacherInvigilations.length === 0) continue;
+          const startY = currentSlot === 'top' ? 5 : midPoint + 5;
+          const targetWidth = pageWidth - 10;
+          const ratio = targetWidth / canvas.width;
+          const targetHeight = canvas.height * ratio;
+          
+          // If the captured content is too tall for half a page, we might need a new page anyway
+          if (targetHeight > (midPoint - 10)) {
+             // If we were supposed to be at bottom, add page and go top
+             if (currentSlot === 'bottom') {
+               pdf.addPage('a4', 'p');
+               currentSlot = 'top';
+             }
+             // Even at top, if it's too tall, it might overflow mid line. 
+             // We'll just draw it and let it be, or we could force 1 per page.
+          }
 
-        if (!isFirstPage) {
-          pdf.addPage('a4', 'l');
+          if (currentSlot === 'top') {
+            // Draw midline
+            pdf.setDrawColor(230, 230, 230);
+            (pdf as any).setLineDashPattern([2, 2], 0);
+            pdf.line(5, midPoint, pageWidth - 5, midPoint);
+            (pdf as any).setLineDashPattern([], 0);
+          }
+
+          pdf.addImage(imgData, 'PNG', 5, startY, targetWidth, targetHeight);
+          
+          // Re-check: if this one was so big it crossed the midPoint, force next to new page
+          if (currentSlot === 'top' && (startY + targetHeight) > midPoint - 5) {
+            currentSlot = 'bottom'; // It actually occupied bottom too, so next loop will start new page
+          }
         }
-        isFirstPage = false;
-
-        const pageWidth = pdf.internal.pageSize.getWidth();
-        pdf.setFontSize(22);
-        pdf.setTextColor(30, 41, 59);
-        pdf.text('Invigilation Schedule', pageWidth / 2, 20, { align: 'center' });
-        
-        pdf.setFontSize(16);
-        pdf.setTextColor(71, 85, 105);
-        pdf.text(`Teacher: ${teacher.displayName}`, pageWidth / 2, 30, { align: 'center' });
-        
-        pdf.setFontSize(10);
-        pdf.setTextColor(148, 163, 184);
-        pdf.text(`Semester: ${selectedSemester === 'S1' ? 'Semester 1' : 'Semester 2'} | Academic Year: ${selectedYear}`, pageWidth / 2, 38, { align: 'center' });
-
-        autoTable(pdf, {
-          head: [['Date', 'Time', 'Module', 'Rooms/Assignment']],
-          body: teacherInvigilations.map(inv => {
-            const mod = resolveModule(inv.moduleId);
-            let detail = '';
-            if (inv.mode === 'Simple') {
-              const rms = inv.roomIds?.map(rid => resolveRoom(rid)?.name).filter(Boolean).join(', ');
-              detail = `Room(s): ${rms}`;
-            } else {
-              const assignment = inv.roomAssignments?.find(ra => ra.invigilators.includes(teacher.uid));
-              const rm = resolveRoom(assignment?.roomId || '');
-              detail = `Room: ${rm?.name || ''}`;
-            }
-            return [inv.date || '', inv.time || '', mod?.name || '', detail];
-          }),
-          startY: 45,
-          theme: 'striped',
-          headStyles: { fillColor: [234, 88, 12], textColor: [255, 255, 255], halign: 'center' },
-          bodyStyles: { halign: 'center' }
-        });
       }
-
-      if (isFirstPage) {
-        toast.error('لا يوجد جداول حراسة للاساتذة في هذه الفترة', { id: toastId });
-        return;
-      }
-
-      pdf.save(`Invigilation_Schedules_All_${selectedSemester}_${selectedYear}.pdf`);
-      toast.success('تم تحميل جداول الحراسة بنجاح', { id: toastId });
+      pdf.save(`Invigilation_All_Teachers_Arabic_Supported_${selectedSemester}.pdf`);
+      toast.success('تم تحميل جداول الحراسة المجمعة بنجاح', { id: toastId });
     } catch (err) {
       console.error('All Teachers Invigilation Export Error:', err);
       toast.error('فشل تصدير جداول الحراسة', { id: toastId });
+    } finally {
+      setSelectedTeacherId(originalTeacherId);
+      setIsExportingBatch(false);
     }
   };
 
@@ -2582,14 +2598,6 @@ export default function Schedules() {
         await handleUpdateTimeForSpecialty(examSpecialty, examTime, 'level', examSessions);
       }
 
-      if (applyRoomsToSpecialty) {
-        const roomsToApply = examMode === 'Simple' ? examRooms : [];
-        const assignmentsToApply = examMode === 'Detailed' ? roomAssignments : [];
-        const invigsToApply = examMode === 'Simple' ? examInvigilators : [];
-        const studentCountToApply = formExamType === 'Resit' ? (examData.studentCount || 0) : 0;
-        await handleUpdateRoomsForSpecialty(examSpecialty, roomsToApply, examMode, assignmentsToApply, 'specialty', invigsToApply, studentCountToApply);
-      }
-
       if (applyOnlyRoomsToSpecialty) {
         const roomsToApply = examMode === 'Simple' ? examRooms : [];
         const assignmentsToApply = examMode === 'Detailed' ? roomAssignments : [];
@@ -2598,14 +2606,6 @@ export default function Schedules() {
         await handleUpdateRoomsForSpecialty(examSpecialty, roomsToApply, examMode, assignmentsToApply, 'specialty', [], studentCountToApply, true);
       }
       
-      if (applyRoomsToLevel) {
-        const roomsToApply = examMode === 'Simple' ? examRooms : [];
-        const assignmentsToApply = examMode === 'Detailed' ? roomAssignments : [];
-        const invigsToApply = examMode === 'Simple' ? examInvigilators : [];
-        const studentCountToApply = formExamType === 'Resit' ? (examData.studentCount || 0) : 0;
-        await handleUpdateRoomsForSpecialty(examSpecialty, roomsToApply, examMode, assignmentsToApply, 'level', invigsToApply, studentCountToApply);
-      }
-
       setApplyRoomsToSpecialty(false);
       setApplyOnlyRoomsToSpecialty(false);
       setApplyRoomsToLevel(false);
@@ -3118,8 +3118,13 @@ export default function Schedules() {
                   </th>
                   {specialties.filter(s => s.levelId === selectedLevel).map((spec) => {
                     // Find the time for this specialty
-                    const specExams = examSessions.filter(s => s.specialtyId === spec.id && s.semester === selectedSemester);
-                    const specTime = specExams.length > 0 ? specExams[0].time : '09:50 - 11:20';
+                    const activeTypeForSpec = selectedExamType === 'All' ? 'Regular' : selectedExamType;
+                    const specExams = examSessions.filter(s => 
+                      s.specialtyId === spec.id && 
+                      s.semester === selectedSemester &&
+                      s.type === activeTypeForSpec
+                    );
+                    const specTime = specExams.length > 0 ? specExams[0].time : (activeTypeForSpec === 'Resit' ? '12:00 - 13:30' : '09:50 - 11:20');
 
                     return (
                       <th key={spec.id} className="p-4 text-center border-l-2 border-black min-w-[220px] bg-white">
@@ -3160,14 +3165,14 @@ export default function Schedules() {
                   const typeKey = selectedExamType === 'All' ? 'Regular' : selectedExamType;
                   
                   if (selectedExamType === 'All') {
-                    const regKey = `${selectedLevel}_Regular`;
-                    const resitKey = `${selectedLevel}_Resit`;
-                    const regDates = levelExtraExamDates[regKey] || levelExtraExamDates[selectedLevel] || [];
-                    const resitDates = levelExtraExamDates[resitKey] || [];
+                    const regKey = `${selectedLevel}_${selectedSemester}_Regular`;
+                    const resitKey = `${selectedLevel}_${selectedSemester}_Resit`;
+                    const regDates = levelExtraExamDates[regKey] || levelExtraExamDates[`${selectedLevel}_Regular`] || levelExtraExamDates[selectedLevel] || [];
+                    const resitDates = levelExtraExamDates[resitKey] || levelExtraExamDates[`${selectedLevel}_Resit`] || [];
                     extraForLevel = Array.from(new Set([...regDates, ...resitDates]));
                   } else {
-                    const compositeKey = `${selectedLevel}_${typeKey}`;
-                    extraForLevel = levelExtraExamDates[compositeKey] || [];
+                    const compositeKey = `${selectedLevel}_${selectedSemester}_${typeKey}`;
+                    extraForLevel = levelExtraExamDates[compositeKey] || levelExtraExamDates[`${selectedLevel}_${typeKey}`] || [];
                     if (typeKey === 'Regular' && extraForLevel.length === 0 && levelExtraExamDates[selectedLevel]) {
                       extraForLevel = levelExtraExamDates[selectedLevel];
                     }
@@ -3217,12 +3222,16 @@ export default function Schedules() {
                                       }
                                       
                                       const typeKey = selectedExamType === 'All' ? 'Regular' : selectedExamType;
-                                      const compositeKey = `${selectedLevel}_${typeKey}`;
+                                      const compositeKey = `${selectedLevel}_${selectedSemester}_${typeKey}`;
+                                      const oldCompositeKey = `${selectedLevel}_${typeKey}`;
                                       const newLevelDates = { ...levelExtraExamDates };
                                       
                                       // Clean the composite key
                                       if (newLevelDates[compositeKey]) {
                                         newLevelDates[compositeKey] = newLevelDates[compositeKey].filter(d => d !== date);
+                                      }
+                                      if (newLevelDates[oldCompositeKey]) {
+                                        newLevelDates[oldCompositeKey] = newLevelDates[oldCompositeKey].filter(d => d !== date);
                                       }
                                       // If it's a regular session or "All", also clean the legacy key if it exists
                                       if ((typeKey === 'Regular' || selectedExamType === 'All') && newLevelDates[selectedLevel]) {
@@ -3270,11 +3279,15 @@ export default function Schedules() {
                                           }
 
                                           const typeKey = selectedExamType === 'All' ? 'Regular' : selectedExamType;
-                                          const compositeKey = `${selectedLevel}_${typeKey}`;
+                                          const compositeKey = `${selectedLevel}_${selectedSemester}_${typeKey}`;
+                                          const oldCompositeKey = `${selectedLevel}_${typeKey}`;
                                           const newLevelDates = {
                                             ...levelExtraExamDates,
                                             [compositeKey]: (levelExtraExamDates[compositeKey] || []).map(d => d === date ? newDate : d)
                                           };
+                                          if (newLevelDates[oldCompositeKey]) {
+                                            newLevelDates[oldCompositeKey] = newLevelDates[oldCompositeKey].map(d => d === date ? newDate : d);
+                                          }
                                           setLevelExtraExamDates(newLevelDates);
                                           await setDoc(doc(db, 'settings', 'examDates'), { levelExtraExamDates: newLevelDates }, { merge: true });
                                           
@@ -3510,35 +3523,7 @@ export default function Schedules() {
                                             <Share2 className="w-3 h-3" />
                                             <span className="text-[10px] font-bold">قاعات فقط</span>
                                           </button>
-                                          <button 
-                                            onClick={(e) => {
-                                              e.stopPropagation();
-                                              const spec = resolveSpecialty(exam.specialtyId);
-                                              setConfirmState({
-                                                show: true,
-                                                title: 'تعميم القاعات والحراسة',
-                                                message: `هل تريد تعميم القاعات والحراسة لهذا الامتحان على جميع امتحانات ${spec?.name}؟ سيتم نسخ القاعات والحراس المخصصة الآن.`,
-                                                type: 'warning',
-                                                onConfirm: () => {
-                                                  handleUpdateRoomsForSpecialty(
-                                                    exam.specialtyId,
-                                                    exam.roomIds || [],
-                                                    exam.mode || 'Simple',
-                                                    exam.roomAssignments || [],
-                                                    'specialty',
-                                                    exam.invigilators || [],
-                                                    exam.studentCount || 0
-                                                  );
-                                                  setConfirmState(prev => ({ ...prev, show: false }));
-                                                }
-                                              });
-                                            }}
-                                            className="p-1 px-2 text-blue-600 hover:bg-blue-50 rounded-xl transition-colors flex items-center gap-1 border border-blue-100 bg-blue-50/30 shadow-sm"
-                                            title="تعميم الكل على التخصص"
-                                          >
-                                            <Share2 className="w-3 h-3" />
-                                            <span className="text-[10px] font-bold">تعميم شامل</span>
-                                          </button>
+
                                           <button 
                                             onClick={(e) => {
                                               e.stopPropagation();
@@ -3578,7 +3563,7 @@ export default function Schedules() {
                           onConfirm: async (newDate) => {
                             if (newDate && !isNaN(Date.parse(newDate))) {
                               const typeKey = selectedExamType === 'All' ? 'Regular' : selectedExamType;
-                            const compositeKey = `${selectedLevel}_${typeKey}`;
+                            const compositeKey = `${selectedLevel}_${selectedSemester}_${typeKey}`;
                             const newLevelDates = {
                                 ...levelExtraExamDates,
                                 [compositeKey]: [...new Set([...(levelExtraExamDates[compositeKey] || []), newDate])].sort()
@@ -4294,10 +4279,14 @@ export default function Schedules() {
                             const modId = e.target.value;
                             setExamModule(modId);
                             if (!examTime) {
-                              const specExams = examSessions.filter(s => s.specialtyId === examSpecialty && s.semester === selectedSemester);
+                              const specExams = examSessions.filter(s => 
+                                s.specialtyId === examSpecialty && 
+                                s.semester === selectedSemester &&
+                                s.type === formExamType
+                              );
                               if (specExams.length > 0) setExamTime(specExams[0].time);
                               else {
-                                const dateExams = examSessions.filter(s => s.date === examDate);
+                                const dateExams = examSessions.filter(s => s.date === examDate && s.type === formExamType);
                                 if (dateExams.length > 0) setExamTime(dateExams[0].time);
                               }
                             }
@@ -4389,22 +4378,6 @@ export default function Schedules() {
                         </div>
 
                         <div className="flex flex-col gap-2 flex-1 w-full">
-                          <div className="flex items-center gap-2 p-3 bg-orange-50 rounded-xl border border-orange-100 w-full text-right underline decoration-orange-300">
-                            <input 
-                              type="checkbox" 
-                              id="applyRoomsToSpecialty"
-                              checked={applyRoomsToSpecialty}
-                              onChange={(e) => {
-                                setApplyRoomsToSpecialty(e.target.checked);
-                                if (e.target.checked) setApplyOnlyRoomsToSpecialty(false);
-                              }}
-                              className="w-4 h-4 text-orange-600 rounded border-slate-300 focus:ring-orange-500"
-                            />
-                            <label htmlFor="applyRoomsToSpecialty" className="text-[10px] font-bold text-orange-700 cursor-pointer">
-                              تعميم القاعات والحراسة على جميع امتحانات التخصص
-                            </label>
-                          </div>
-
                           <div className="flex items-center gap-2 p-3 bg-orange-50/50 rounded-xl border border-orange-100/50 w-full">
                             <input 
                               type="checkbox" 
@@ -4418,19 +4391,6 @@ export default function Schedules() {
                             />
                             <label htmlFor="applyOnlyRoomsToSpecialty" className="text-[10px] font-bold text-orange-700 cursor-pointer">
                               تعميم القاعات فقط على جميع امتحانات التخصص
-                            </label>
-                          </div>
-                          
-                          <div className="flex items-center gap-2 p-3 bg-amber-50 rounded-xl border border-amber-100 w-full">
-                            <input 
-                              type="checkbox" 
-                              id="applyRoomsToLevel"
-                              checked={applyRoomsToLevel}
-                              onChange={(e) => setApplyRoomsToLevel(e.target.checked)}
-                              className="w-4 h-4 text-amber-600 rounded border-slate-300 focus:ring-amber-500"
-                            />
-                            <label htmlFor="applyRoomsToLevel" className="text-[10px] font-bold text-amber-700 cursor-pointer">
-                              تعميم القاعات والحراسة على جميع تخصصات المستوى
                             </label>
                           </div>
                         </div>
@@ -5118,6 +5078,36 @@ export default function Schedules() {
         </div>
       </div>
     )}
+
+      {/* Progress Overlay for Batch Export */}
+      {isExportingBatch && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4" dir="rtl">
+          <div className="bg-white rounded-3xl p-8 max-w-sm w-full shadow-2xl text-center space-y-6">
+            <div className="w-20 h-20 bg-blue-50 rounded-full flex items-center justify-center mx-auto">
+              <Download className="w-10 h-10 text-blue-600 animate-bounce" />
+            </div>
+            <div className="space-y-2">
+              <h3 className="text-xl font-bold text-slate-900">جاري تحضير الملفات...</h3>
+              <p className="text-slate-500 text-sm">يرجى عدم إغلاق المتصفح أو تغيير الصفحة</p>
+            </div>
+            <div className="space-y-3">
+              <div className="flex justify-between text-sm font-bold text-slate-700">
+                <span>التقدم</span>
+                <span>{exportProgress} / {exportTotal}</span>
+              </div>
+              <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden">
+                <div 
+                  className="bg-blue-600 h-full transition-all duration-300"
+                  style={{ width: `${(exportProgress / exportTotal) * 100}%` }}
+                />
+              </div>
+            </div>
+            <div className="pt-2 text-xs text-slate-400 font-medium">
+              سيتم تحميل الملف تلقائياً عند الاكتمال
+            </div>
+          </div>
+        </div>
+      )}
   </div>
 );
 }
