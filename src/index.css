@@ -91,3 +91,144 @@
     @apply w-full bg-slate-50 border border-slate-100 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all;
   }
 }
+
+/* @media print styles for perfect landscape student attendance matching print sheet specs */
+@media print {
+  /* Hide the entire application tree and background overlays */
+  body {
+    background-color: #ffffff !important;
+    background-image: none !important;
+    color: #000000 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  #root,
+  body > div:not(#attendance-minutes-modal) {
+    display: none !important;
+  }
+
+  /* Target the Modal background container and format as plain relative page wrapper */
+  #attendance-minutes-modal {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 297mm !important;
+    height: auto !important;
+    background: transparent !important;
+    backdrop-filter: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    box-shadow: none !important;
+    overflow: visible !important;
+    display: block !important;
+  }
+
+  #attendance-minutes-modal > div {
+    border: none !important;
+    box-shadow: none !important;
+    background: transparent !important;
+    width: 100% !important;
+    max-width: none !important;
+    height: auto !important;
+    overflow: visible !important;
+    display: block !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  /* Hide headers, close button, and toolbar controls of the modal */
+  #attendance-minutes-modal .border-b-2,
+  #attendance-minutes-modal .bg-white,
+  #attendance-minutes-modal .p-4,
+  #attendance-minutes-modal button,
+  #attendance-minutes-modal .absolute,
+  #attendance-minutes-modal .fixed-header,
+  #close-attendance-modal-btn {
+    display: none !important;
+  }
+
+  /* Ensure the sheet itself is active, perfectly visible, and fills the container */
+  #attendance-print-page {
+    display: block !important;
+    visibility: visible !important;
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 297mm !important;
+    min-height: 210mm !important;
+    margin: 0 !important;
+    padding: 10mm 10mm 5mm 10mm !important;
+    border: 2px solid #000000 !important;
+    box-shadow: none !important;
+    background: #ffffff !important;
+    box-sizing: border-box !important;
+    page-break-inside: avoid !important;
+    page-break-after: avoid !important;
+  }
+
+  #attendance-print-page * {
+    visibility: visible !important;
+    color: #000000 !important;
+    border-color: #000000 !important;
+    background-color: transparent !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Let specific custom backgrounds print correctly like headings or highlighting */
+  #attendance-print-page .bg-slate-50,
+  #attendance-print-page .bg-slate-100 {
+    background-color: #f1f5f9 !important;
+  }
+  #attendance-print-page .bg-emerald-50 {
+    background-color: #ecfdf5 !important;
+  }
+  #attendance-print-page .text-emerald-800,
+  #attendance-print-page .text-emerald-700 {
+    color: #065f46 !important;
+  }
+
+  /* Force display structures */
+  #attendance-print-page .flex,
+  #attendance-print-page [class*="flex"] {
+    display: flex !important;
+  }
+  #attendance-print-page .grid,
+  #attendance-print-page [class*="grid"] {
+    display: grid !important;
+  }
+  #attendance-print-page table {
+    display: table !important;
+    width: 100% !important;
+    border-collapse: collapse !important;
+  }
+  #attendance-print-page colgroup {
+    display: table-column-group !important;
+  }
+  #attendance-print-page col {
+    display: table-column !important;
+  }
+  #attendance-print-page thead {
+    display: table-header-group !important;
+  }
+  #attendance-print-page tbody {
+    display: table-row-group !important;
+  }
+  #attendance-print-page tr {
+    display: table-row !important;
+    page-break-inside: avoid !important;
+    height: 28px !important;
+  }
+  #attendance-print-page th,
+  #attendance-print-page td {
+    display: table-cell !important;
+    padding: 4px !important;
+  }
+
+  /* Configure print page options */
+  @page {
+    size: A4 landscape;
+    margin: 0mm;
+  }
+}

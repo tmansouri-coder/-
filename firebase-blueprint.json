@@ -51,7 +51,11 @@
         "levelId": { "type": "string" },
         "semester": { "type": "string", "enum": ["S1", "S2"] },
         "credits": { "type": "number" },
-        "coefficient": { "type": "number" }
+        "coefficient": { "type": "number" },
+        "progresTD": { "type": "boolean" },
+        "progresTP": { "type": "boolean" },
+        "progresCours": { "type": "boolean" },
+        "progresResit": { "type": "boolean" }
       },
       "required": ["id", "name", "levelId", "semester"]
     },

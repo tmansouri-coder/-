@@ -10,8 +10,8 @@ import { motion, AnimatePresence } from 'motion/react';
 import toast from 'react-hot-toast';
 
 export default function AcademicStructure() {
-  const { isAdmin, isViceAdmin } = useAuth();
-  const canManage = isAdmin || isViceAdmin;
+  const { isAdmin, isViceAdmin, isSpecialtyManager, user } = useAuth();
+  const canManage = isAdmin || isViceAdmin || isSpecialtyManager;
   const { selectedYear } = useAcademicYear();
   const [cycles, setCycles] = useState<Cycle[]>([]);
   const [levels, setLevels] = useState<Level[]>([]);
@@ -211,6 +211,36 @@ export default function AcademicStructure() {
     }
   };
 
+  const handleToggleProgresField = async (moduleId: string, field: 'progresTD' | 'progresTP' | 'progresCours' | 'progresResit') => {
+    const module = modules.find(m => m.id === moduleId);
+    if (!module) return;
+
+    const isAllowed = isAdmin || isViceAdmin || 
+                      (isSpecialtyManager && user?.specialtyIds?.includes(module?.specialtyId || '')) ||
+                      module?.teacherId === user?.uid;
+                      
+    if (!isAllowed) {
+      toast.error('غير مسموح لك بتعديل حالة المقياس');
+      return;
+    }
+
+    const newValue = !module[field];
+    const updatePromise = updateDoc(doc(db, 'modules', moduleId), { [field]: newValue });
+    
+    toast.promise(updatePromise, {
+      loading: 'جاري التحديث في بروغرس...',
+      success: 'تم التحديث بنجاح',
+      error: 'فشل التحديث'
+    });
+
+    try {
+      await updatePromise;
+      setModules(prev => prev.map(m => m.id === moduleId ? { ...m, [field]: newValue } : m));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `modules/${moduleId}`);
+    }
+  };
+
   if (loading) return <div className="p-8 text-center">جاري التحميل...</div>;
 
   return (
@@ -372,25 +402,104 @@ export default function AcademicStructure() {
                         </div>
                       </div>
                       <div className="space-y-3">
-                        {modules.filter(m => m.specialtyId === spec.id).map(module => (
-                          <div key={module.id} className="flex items-center justify-between p-4 rounded-2xl bg-slate-50 border border-slate-100 group/module hover:bg-white hover:shadow-md hover:shadow-slate-200/50 transition-all duration-300">
-                            <span className="text-sm font-extrabold text-slate-700">{module.name}</span>
-                            <div className="flex items-center gap-4">
-                              {isAdmin && (
-                                <div className="flex gap-1 opacity-0 group-hover/module:opacity-100 transition-all">
-                                  <button onClick={() => setEditingItem({ id: module.id, name: module.name, type: 'module' })} className="p-1.5 hover:bg-slate-50 rounded-lg text-slate-400 transition-colors"><Edit2 className="w-3.5 h-3.5" /></button>
-                                  <button onClick={() => setConfirmDelete({ id: module.id, type: 'module', name: module.name })} className="p-1.5 hover:bg-slate-50 rounded-lg text-red-600 transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>
+                        {modules.filter(m => m.specialtyId === spec.id).map(module => {
+                          const isAllowedToToggle = isAdmin || isViceAdmin || 
+                                            (isSpecialtyManager && user?.specialtyIds?.includes(module?.specialtyId || '')) ||
+                                            module?.teacherId === user?.uid;
+                          return (
+                            <div key={module.id} className="flex flex-col p-4 rounded-2xl bg-slate-50 border border-slate-100 group/module hover:bg-white hover:shadow-md hover:shadow-slate-200/50 transition-all duration-300 gap-3">
+                              <div className="flex items-center justify-between">
+                                <span className="text-sm font-extrabold text-slate-700">{module.name}</span>
+                                <div className="flex items-center gap-2">
+                                  {isAdmin && (
+                                    <div className="flex gap-1 opacity-0 group-hover/module:opacity-100 transition-all font-sans">
+                                      <button onClick={() => setEditingItem({ id: module.id, name: module.name, type: 'module' })} className="p-1.5 hover:bg-slate-50 rounded-lg text-slate-400 transition-colors"><Edit2 className="w-3.5 h-3.5" /></button>
+                                      <button onClick={() => setConfirmDelete({ id: module.id, type: 'module', name: module.name })} className="p-1.5 hover:bg-slate-50 rounded-lg text-red-600 transition-colors"><Trash2 className="w-3.5 h-3.5" /></button>
+                                    </div>
+                                  )}
+                                  <span className={cn(
+                                    "text-[10px] font-black px-3 py-1 rounded-xl border shadow-sm",
+                                    module.semester === 'S1' ? "bg-emerald-50 border-emerald-100 text-emerald-600" : "bg-blue-50 border-blue-100 text-blue-600"
+                                  )}>
+                                    {module.semester}
+                                  </span>
                                 </div>
-                              )}
-                              <span className={cn(
-                                "text-[10px] font-black px-3 py-1 rounded-xl border shadow-sm",
-                                module.semester === 'S1' ? "bg-emerald-50 border-emerald-100 text-emerald-600" : "bg-blue-50 border-blue-100 text-blue-600"
-                              )}>
-                                {module.semester}
-                              </span>
+                              </div>
+
+                              <div className="pt-2 border-t border-slate-100/60 flex flex-col gap-2">
+                                <div className="flex items-center justify-between text-[9px] font-extrabold text-slate-400">
+                                  <span>متابعة إدخال النقاط في بروغرس (Progres)</span>
+                                </div>
+                                
+                                <div className="grid grid-cols-2 gap-2 text-center pointer-events-auto">
+                                  <div className="p-2 bg-slate-100/50 border border-slate-200/40 rounded-xl flex flex-col gap-1.5">
+                                    <span className="text-[9px] font-black text-slate-500 block pb-1 border-b border-slate-200/40">الامتحان العادي</span>
+                                    <div className="flex flex-col gap-1">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleToggleProgresField(module.id, 'progresTD')}
+                                        disabled={!isAllowedToToggle}
+                                        className={cn(
+                                          "px-2 py-1 text-[9px] font-black rounded-lg border transition-all text-center",
+                                          module.progresTD 
+                                            ? "bg-emerald-50 border-emerald-200 text-emerald-700 font-extrabold shadow-sm" 
+                                            : "bg-white border-slate-200 text-slate-400 hover:text-blue-600 hover:bg-blue-50 hover:border-blue-100 cursor-pointer disabled:cursor-not-allowed"
+                                        )}
+                                      >
+                                        أعمال موجهة {module.progresTD ? '✓' : '✗'}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleToggleProgresField(module.id, 'progresTP')}
+                                        disabled={!isAllowedToToggle}
+                                        className={cn(
+                                          "px-2 py-1 text-[9px] font-black rounded-lg border transition-all text-center",
+                                          module.progresTP 
+                                            ? "bg-emerald-50 border-emerald-200 text-emerald-700 font-extrabold shadow-sm" 
+                                            : "bg-white border-slate-200 text-slate-400 hover:text-blue-600 hover:bg-blue-50 hover:border-blue-100 cursor-pointer disabled:cursor-not-allowed"
+                                        )}
+                                      >
+                                        أعمال تطبيقية {module.progresTP ? '✓' : '✗'}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleToggleProgresField(module.id, 'progresCours')}
+                                        disabled={!isAllowedToToggle}
+                                        className={cn(
+                                          "px-2 py-1 text-[9px] font-black rounded-lg border transition-all text-center",
+                                          module.progresCours 
+                                            ? "bg-emerald-50 border-emerald-200 text-emerald-700 font-extrabold shadow-sm" 
+                                            : "bg-white border-slate-200 text-slate-400 hover:text-blue-600 hover:bg-blue-50 hover:border-blue-100 cursor-pointer disabled:cursor-not-allowed"
+                                        )}
+                                      >
+                                        محاضرة {module.progresCours ? '✓' : '✗'}
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  <div className="p-2 bg-slate-100/50 border border-slate-200/40 rounded-xl flex flex-col justify-between gap-1.5">
+                                    <div>
+                                      <span className="text-[9px] font-black text-slate-500 block pb-1 border-b border-slate-200/40">الامتحان الاستدراكي</span>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleToggleProgresField(module.id, 'progresResit')}
+                                      disabled={!isAllowedToToggle}
+                                      className={cn(
+                                        "px-2 py-3.5 text-[9px] font-black rounded-lg border transition-all text-center",
+                                        module.progresResit 
+                                          ? "bg-emerald-50 border-emerald-200 text-emerald-700 font-extrabold shadow-sm" 
+                                          : "bg-white border-slate-200 text-slate-400 hover:text-blue-600 hover:bg-blue-50 hover:border-blue-100 cursor-pointer disabled:cursor-not-allowed"
+                                      )}
+                                    >
+                                      محاضرة {module.progresResit ? '✓' : '✗'}
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
                             </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                         {modules.filter(m => m.specialtyId === spec.id).length === 0 && (
                           <div className="py-8 text-center space-y-2">
                             <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">لا توجد مقاييس مضافة</p>

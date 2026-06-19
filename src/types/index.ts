@@ -79,6 +79,10 @@ export interface Module {
   progress?: number; // Progress percentage (0-100)
   teacherId?: string; // Main teacher assigned
   isST?: boolean; // Is it an ST (Tronc Commun) module?
+  progresTD?: boolean; // Regular TD grades entered in Progres
+  progresTP?: boolean; // Regular TP grades entered in Progres
+  progresCours?: boolean; // Regular Lecture/Exam grades entered in Progres
+  progresResit?: boolean; // Resit Lecture grades entered in Progres
 }
 
 export interface Room {

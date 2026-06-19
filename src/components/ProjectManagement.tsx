@@ -112,12 +112,22 @@ export default function ProjectManagement() {
   const handleDownloadTemplate = () => {
     const templateData = [
       {
-        'عنوان المشروع (Title)': 'مثال: تطبيق ذكاء اصطناعي',
+        'عنوان المشروع (Title)': 'مثال: تطبيق ذكاء اصطناعي (ليسانس)',
         'البريد الإلكتروني للمؤطر (Supervisor Email)': 'teacher@univ.dz',
         'اسم المؤطر المساعد (Assistant Supervisor)': 'أحمد علي',
         'القرار 1275 (Decision 1275)': 'لا',
-        'التخصص (Specialty)': 'GL',
-        'الطور (Cycle)': 'Master'
+        'التخصص (Specialty)': 'Energetics',
+        'الطور (Cycle)': 'Licence',
+        'المستوى (Level)': 'L3'
+      },
+      {
+        'عنوان المشروع (Title)': 'مثال: نظام ذكي متكامل (ماستر)',
+        'البريد الإلكتروني للمؤطر (Supervisor Email)': 'teacher@univ.dz',
+        'اسم المؤطر المساعد (Assistant Supervisor)': 'أحمد علي',
+        'القرار 1275 (Decision 1275)': 'نعم',
+        'التخصص (Specialty)': 'Energetics',
+        'الطور (Cycle)': 'Master',
+        'المستوى (Level)': 'M2'
       }
     ];
 
@@ -148,9 +158,77 @@ export default function ProjectManagement() {
           const assistName = row['اسم المؤطر المساعد (Assistant Supervisor)'] || row['Assistant Supervisor'];
           const is1275 = (row['القرار 1275 (Decision 1275)'] || row['Decision 1275']) === 'نعم' || (row['القرار 1275 (Decision 1275)'] || row['Decision 1275']) === 'Yes';
           const specName = row['التخصص (Specialty)'] || row['Specialty'];
+          const cycleVal = row['الطور (Cycle)'] || row['Cycle'] || row['الطور'] || '';
+          const levelVal = row['المستوى (Level)'] || row['Level'] || row['المستوى'] || row['السنة (Year)'] || row['السنة'] || '';
           
           const supervisor = teachers.find(t => t.email === supervisorEmail);
-          const specialty = specialties.find(s => s.name === specName);
+          
+          // Filter specialties matching current specName (case-insensitive and trimmed)
+          const matchedSpecs = specialties.filter(s => 
+            s.name.trim().toLowerCase() === String(specName || '').trim().toLowerCase()
+          );
+
+          let specialty: any = null;
+
+          if (matchedSpecs.length === 1) {
+            specialty = matchedSpecs[0];
+          } else if (matchedSpecs.length > 1) {
+            // Score matched specialties to resolve L3 vs M2 or general levels
+            let bestSpec = matchedSpecs[0];
+            let highestScore = -1;
+
+            for (const s of matchedSpecs) {
+              let score = 0;
+              const level = levels.find(l => l.id === s.levelId);
+              const cycle = level ? cycles.find(c => c.id === level.cycleId) : null;
+              
+              const levelNameLower = (level?.name || '').toLowerCase();
+              const cycleNameLower = (cycle?.name || '').toLowerCase();
+              
+              const cycleStr = String(cycleVal).trim().toLowerCase();
+              const levelStr = String(levelVal).trim().toLowerCase();
+
+              const hasMasterKeyword = (str: string) => str.includes('master') || str.includes('ماستر') || str.includes('m2') || str.includes('ثانية ماستر');
+              const hasLicenceKeyword = (str: string) => str.includes('licence') || str.includes('license') || str.includes('ليسانس') || str.includes('l3') || str.includes('ثالثة ليسانس');
+
+              // Cycle Matches
+              if (cycleStr) {
+                if (hasMasterKeyword(cycleStr) && (cycleNameLower.includes('ماستر') || cycleNameLower.includes('master') || levelNameLower.includes('master'))) {
+                  score += 10;
+                } else if (hasLicenceKeyword(cycleStr) && (cycleNameLower.includes('ليسانس') || cycleNameLower.includes('licence') || cycleNameLower.includes('license') || levelNameLower.includes('bachelor'))) {
+                  score += 10;
+                }
+              }
+
+              // Level Matches
+              if (levelStr) {
+                const isL3Db = levelNameLower.includes('third') || levelNameLower.includes('l3');
+                const isM2Db = levelNameLower.includes('second') || levelNameLower.includes('m2');
+
+                const isL3Excel = levelStr.includes('3') || levelStr.includes('l3') || levelStr.includes('ثالث');
+                const isM2Excel = levelStr.includes('2') || levelStr.includes('m2') || levelStr.includes('ثان');
+
+                if (isL3Excel && isL3Db) {
+                  score += 20;
+                } else if (isM2Excel && isM2Db) {
+                  score += 20;
+                }
+              }
+
+              if (score > highestScore) {
+                highestScore = score;
+                bestSpec = s;
+              }
+            }
+            specialty = bestSpec;
+          } else {
+            // Substring fallback
+            const fallbackSpec = specialties.find(s => 
+              s.name.trim().toLowerCase().includes(String(specName || '').trim().toLowerCase()) ||
+              String(specName || '').trim().toLowerCase().includes(s.name.trim().toLowerCase())
+            );
+            specialty = fallbackSpec || null;
+          }
 
           if (title && supervisor && specialty) {
             newProjects.push({

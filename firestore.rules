@@ -59,7 +59,7 @@ service cloud.firestore {
     // Modules
     match /modules/{id} {
       allow read: if isAuthenticated();
-      allow write: if isAdmin() || isViceAdmin() || isSpecialtyManager();
+      allow write: if isAdmin() || isViceAdmin() || isSpecialtyManager() || (isAuthenticated() && resource != null && resource.data.teacherId == request.auth.uid);
     }
 
     // Schedule Sessions

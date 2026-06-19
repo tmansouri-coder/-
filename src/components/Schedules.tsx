@@ -5,23 +5,28 @@ import { useAuth } from '../contexts/AuthContext';
 import { useAcademicYear } from '../contexts/AcademicYearContext';
 import { 
   Cycle, Level, Specialty, Module, Room, User, 
-  ScheduleSession, ExamSession, SessionType, RoomAssignment 
+  ScheduleSession, ExamSession, SessionType, RoomAssignment, Student 
 } from '../types';
 import { 
   Calendar, Clock, MapPin, User as UserIcon, 
   Plus, Trash2, Edit2, Download, Filter,
   ChevronRight, ChevronLeft, Search, ClipboardList,
   AlertTriangle, Mail, Copy, X, ShieldAlert, ShieldCheck,
-  RefreshCw, FileText, Share2, FileSpreadsheet, Sparkles, Info
+  RefreshCw, FileText, Share2, FileSpreadsheet, Sparkles, Info,
+  ChevronUp, ChevronDown, Settings
 } from 'lucide-react';
 import { cn, mapLevelName } from '../lib/utils';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import 'jspdf-autotable';
-import html2canvas from 'html2canvas';
+import html2canvas from '../lib/safeHtml2canvas';
 import * as XLSX from 'xlsx';
 import toast from 'react-hot-toast';
 import PDFScheduleImporter from './PDFScheduleImporter';
+import ExamMinutesModal from './ExamMinutesModal';
+import SessionAttendanceModal from './SessionAttendanceModal';
+import BulkExamMinutesModal from './BulkExamMinutesModal';
+import BulkSessionAttendanceModal from './BulkSessionAttendanceModal';
 
 type ScheduleTab = 'semester' | 'exams' | 'halls' | 'personal';
 
@@ -45,6 +50,8 @@ const DAY_LABELS: Record<string, string> = {
 };
 
 const EXAM_TIMES = [
+  '08:15 - 09:15',
+  '09:30 - 10:30',
   '08:15 - 09:45',
   '10:00 - 11:30',
   '08:10 - 09:40',
@@ -72,8 +79,15 @@ export default function Schedules() {
   const [modules, setModules] = useState<Module[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [teachers, setTeachers] = useState<User[]>([]);
+  const [students, setStudents] = useState<Student[]>([]);
   const [scheduleSessions, setScheduleSessions] = useState<ScheduleSession[]>([]);
   const [examSessions, setExamSessions] = useState<ExamSession[]>([]);
+  const [printingExam, setPrintingExam] = useState<ExamSession | null>(null);
+  const [printingSession, setPrintingSession] = useState<ScheduleSession | null>(null);
+  const [printingBulkExamSpecialty, setPrintingBulkExamSpecialty] = useState<string | null>(null);
+  const [printingBulkAttendanceSpecialty, setPrintingBulkAttendanceSpecialty] = useState<string | null>(null);
+  const [isAdminMenuOpen, setIsAdminMenuOpen] = useState(false);
+  const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
 
   // Filters
   const [selectedCycle, setSelectedCycle] = useState<string>(() => localStorage.getItem('selectedCycle') || '');
@@ -291,6 +305,10 @@ export default function Schedules() {
           if (snap.exists()) {
             setLevelExtraExamDates(snap.data().levelExtraExamDates || {});
           }
+        }));
+
+        unsubscribers.push(onSnapshot(collection(db, 'students'), (snap) => {
+          setStudents(snap.docs.map(d => ({ id: d.id, ...d.data() } as Student)));
         }));
 
         // Real-time synchronization for sessions
@@ -753,6 +771,26 @@ export default function Schedules() {
       return s.specialtyId === specId;
     });
 
+    const getPreservedAssignments = (targetExam: any, newAssignments: RoomAssignment[]) => {
+      if (targetExam.mode === 'Detailed' && targetExam.roomAssignments) {
+        return newAssignments.map((newA, idx) => {
+          const existingInvigs = targetExam.roomAssignments?.[idx]?.invigilators || [];
+          return {
+            ...newA,
+            invigilators: existingInvigs
+          };
+        });
+      } else {
+        const existingInvigs = targetExam.invigilators || [];
+        return newAssignments.map((newA, idx) => {
+          return {
+            ...newA,
+            invigilators: idx === 0 ? existingInvigs : []
+          };
+        });
+      }
+    };
+
     try {
       if (examsToUpdate.length > 0) {
         const batch = examsToUpdate.map(async (exam) => {
@@ -762,14 +800,17 @@ export default function Schedules() {
              updateData.roomIds = rooms;
              if (!skipInvigilators) {
                updateData.invigilators = invigilators;
+             } else {
+               if (exam.mode === 'Detailed') {
+                 updateData.invigilators = exam.roomAssignments?.flatMap(a => a.invigilators || []) || [];
+               }
              }
              updateData.studentCount = studentCount;
              updateData.roomAssignments = deleteField();
           } else {
              // In detailed mode, rooms and invigilators are linked in assignments
-             // If skipping invigilators, we strip them from assignments
              if (skipInvigilators) {
-               updateData.roomAssignments = assignments.map(a => ({ ...a, invigilators: [] }));
+               updateData.roomAssignments = getPreservedAssignments(exam, assignments);
              } else {
                updateData.roomAssignments = assignments;
              }
@@ -788,11 +829,21 @@ export default function Schedules() {
             const updated = { ...s, mode };
             if (mode === 'Simple') {
               updated.roomIds = rooms;
-              updated.invigilators = invigilators;
+              if (!skipInvigilators) {
+                updated.invigilators = invigilators;
+              } else {
+                if (s.mode === 'Detailed') {
+                  updated.invigilators = s.roomAssignments?.flatMap(a => a.invigilators || []) || [];
+                }
+              }
               updated.studentCount = studentCount;
               delete (updated as any).roomAssignments;
             } else {
-              updated.roomAssignments = assignments;
+              if (skipInvigilators) {
+                updated.roomAssignments = getPreservedAssignments(s, assignments);
+              } else {
+                updated.roomAssignments = assignments;
+              }
               delete (updated as any).roomIds;
               delete (updated as any).invigilators;
             }
@@ -2629,113 +2680,218 @@ export default function Schedules() {
 
   return (
     <div className="space-y-8" dir="rtl">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 pb-4 border-b border-slate-100">
         <div>
           <h1 className="text-2xl font-bold text-slate-900">الجداول الزمنية</h1>
           <p className="text-slate-500">إدارة جداول السداسي، الامتحانات، واستغلال القاعات</p>
         </div>
-        <div className="flex gap-2">
+        
+        {/* Action Toolbar with Dropdowns to Prevent Overflow */}
+        <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+          
+          {/* 1. Admin & Maintenance Tools (Only for Admins) */}
           {(isAdmin || isViceAdmin) && (
-            <>
-              <button 
-                onClick={() => setShowImporter(true)}
-                className="flex items-center gap-2 px-4 py-2 bg-purple-50 text-purple-600 border border-purple-100 rounded-xl hover:bg-purple-100 transition-all shadow-sm"
-                title="استيراد من ملف PDF"
-              >
-                <FileText className="w-4 h-4" />
-                <span>استيراد PDF</span>
-              </button>
-              <button 
-                onClick={handleRepairExams}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-600 rounded-xl hover:bg-blue-100 transition-all shadow-sm border border-blue-100"
-                title="إصلاح الامتحانات غير المرئية أو المرتبطة ببيانات قديمة"
-              >
-                <RefreshCw className="w-4 h-4" />
-                <span>إصلاح وتحديث</span>
-              </button>
-              <button 
-                onClick={handleCopySchedule}
-                disabled={copying}
-                className="flex items-center gap-2 px-4 py-2 bg-amber-50 text-amber-600 rounded-xl hover:bg-amber-100 transition-all shadow-sm border border-amber-100"
-              >
-                <Copy className="w-4 h-4" />
-                <span>نسخ للسنة القادمة</span>
-              </button>
-              <button 
-                onClick={handleCleanupInvisibleExams}
-                className="flex items-center gap-2 px-4 py-2 bg-slate-50 text-slate-600 rounded-xl hover:bg-slate-100 transition-all shadow-sm border border-slate-100"
-                title="حذف الامتحانات المتبقية لمواد أو تخصصات محذوفة"
-              >
-                <ShieldAlert className="w-4 h-4" />
-                <span>تنظيف الوهمي</span>
-              </button>
-              <button 
-                onClick={handleDeleteAllExams}
-                className="flex items-center gap-2 px-4 py-2 bg-red-50 text-red-600 rounded-xl hover:bg-red-100 transition-all shadow-sm border border-red-100"
-              >
-                <Trash2 className="w-4 h-4" />
-                <span>حذف الكل</span>
-              </button>
-            </>
-          )}
-          <button 
-            onClick={() => {
-              if (activeTab === 'exams') exportExamPDF();
-              else if (activeTab === 'personal') exportPersonalInvigilationPDF();
-              else exportPDF();
-            }}
-            className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-xl text-slate-600 hover:bg-slate-50 transition-all shadow-sm"
-          >
-            <Download className="w-4 h-4" />
-            <span>تحميل PDF</span>
-          </button>
-          {(isAdmin || isViceAdmin || isSpecialtyManager) && (
-            <>
-              <button 
+            <div className="relative">
+              <button
                 onClick={() => {
-                  setSmartInvigilators(teachers.filter(t => t.employmentType !== 'temporary').map(t => t.uid)); // Default to non-temporary
-                  setShowSmartInvigilationModal(true);
+                  setIsAdminMenuOpen(!isAdminMenuOpen);
+                  setIsExportMenuOpen(false);
                 }}
-                className="flex items-center gap-2 px-4 py-2 bg-indigo-50 border border-indigo-100 rounded-xl text-indigo-600 hover:bg-indigo-100 transition-all shadow-sm font-bold"
+                className={`flex items-center gap-2 px-4 py-2 bg-slate-100 border-2 rounded-xl text-slate-700 hover:bg-slate-200 transition-all shadow-sm font-bold text-xs ${
+                  isAdminMenuOpen ? 'border-purple-600 ring-2 ring-purple-100' : 'border-black'
+                }`}
+                title="إدارة الجداول والبيانات الأساسية"
+                id="admin-tools-dropdown-trigger"
               >
-                <Sparkles className="w-5 h-5 text-indigo-600" />
-                <span>توزيع ذكي (AI)</span>
+                <Settings className="w-4 h-4 text-purple-600" />
+                <span>أدوات الإدارة</span>
+                {isAdminMenuOpen ? <ChevronUp className="w-3.5 h-3.5 opacity-70" /> : <ChevronDown className="w-3.5 h-3.5 opacity-70" />}
               </button>
-              <button 
-                onClick={exportInvigilationStatsExcel}
-                className="flex items-center gap-2 px-4 py-2 bg-emerald-50 border border-emerald-100 rounded-xl text-emerald-600 hover:bg-emerald-100 transition-all shadow-sm font-bold"
-              >
-                <FileSpreadsheet className="w-5 h-5 text-emerald-600" />
-                <span>إحصائيات الحراسة (Excel)</span>
-              </button>
-              <button 
-                onClick={exportAllTeachersWeeklySchedulesPDF}
-                className="flex items-center gap-2 px-4 py-2 bg-orange-50 border border-orange-100 rounded-xl text-orange-600 hover:bg-orange-100 transition-all shadow-sm font-bold"
-                title="تحميل الجدول الأسبوعي لجميع الأساتذة في ملف واحد"
-              >
-                <Calendar className="w-5 h-5 text-orange-600" />
-                <span>جداول الحصص (PDF)</span>
-              </button>
-              <button 
-                onClick={exportAllTeachersInvigilationSchedulesPDF}
-                className="flex items-center gap-2 px-4 py-2 bg-rose-50 border border-rose-100 rounded-xl text-rose-600 hover:bg-rose-100 transition-all shadow-sm font-bold"
-                title="تحميل جداول الحراسة لجميع الأساتذة في ملف واحد"
-              >
-                <ShieldAlert className="w-5 h-5 text-rose-600" />
-                <span>جداول الحراسة (PDF)</span>
-              </button>
-            </>
+
+              {isAdminMenuOpen && (
+                <>
+                  <div className="fixed inset-0 z-30" onClick={() => setIsAdminMenuOpen(false)} />
+                  <div 
+                    className="absolute left-0 mt-2 w-64 bg-white border-2 border-black rounded-2xl shadow-xl z-40 p-2 flex flex-col gap-1.5 align-right text-right"
+                    style={{ direction: 'rtl' }}
+                  >
+                    <button 
+                      onClick={() => { setShowImporter(true); setIsAdminMenuOpen(false); }}
+                      className="flex items-center gap-2.5 w-full text-right px-3 py-2 bg-purple-50 hover:bg-purple-100 text-purple-700 rounded-xl transition-all font-semibold text-xs border border-purple-100"
+                    >
+                      <FileText className="w-4 h-4" />
+                      <span>استيراد من ملف PDF (جدول)</span>
+                    </button>
+                    
+                    <button 
+                      onClick={() => { handleRepairExams(); setIsAdminMenuOpen(false); }}
+                      className="flex items-center gap-2.5 w-full text-right px-3 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-xl transition-all font-semibold text-xs border border-blue-100"
+                      title="إصلاح الامتحانات غير المرئية أو المرتبطة ببيانات قديمة"
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                      <span>إصلاح وتحديث البيانات</span>
+                    </button>
+                    
+                    <button 
+                      onClick={() => { handleCopySchedule(); setIsAdminMenuOpen(false); }}
+                      disabled={copying}
+                      className="flex items-center gap-2.5 w-full text-right px-3 py-2 bg-amber-50 hover:bg-amber-100 text-amber-700 rounded-xl transition-all font-semibold text-xs border border-amber-100"
+                    >
+                      <Copy className="w-4 h-4" />
+                      <span>نسخ للسنة القادمة</span>
+                    </button>
+                    
+                    <button 
+                      onClick={() => { handleCleanupInvisibleExams(); setIsAdminMenuOpen(false); }}
+                      className="flex items-center gap-2.5 w-full text-right px-3 py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 rounded-xl transition-all font-semibold text-xs border border-slate-200"
+                      title="حذف الامتحانات المتبقية لمواد أو تخصصات محذوفة"
+                    >
+                      <ShieldAlert className="w-4 h-4" />
+                      <span>تنظيف البيانات الوهمية</span>
+                    </button>
+                    
+                    <div className="border-t border-slate-100 my-1" />
+                    
+                    <button 
+                      onClick={() => { handleDeleteAllExams(); setIsAdminMenuOpen(false); }}
+                      className="flex items-center gap-2.5 w-full text-right px-3 py-2 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl transition-all font-bold text-xs border border-red-100"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      <span>حذف كافة الامتحانات لتهيئة الأقسام</span>
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
           )}
-          {activeTab === 'exams' && (
-            <button 
-              onClick={() => exportExamPDF(false)}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-50 border border-blue-100 rounded-xl text-blue-600 hover:bg-blue-100 transition-all shadow-sm"
-              title="نسخة خاصة بالطلبة لا تحتوي على أسماء الحراس"
+
+          {/* 2. Download & Reports Dropdown (All users) */}
+          <div className="relative">
+            <button
+              onClick={() => {
+                setIsExportMenuOpen(!isExportMenuOpen);
+                setIsAdminMenuOpen(false);
+              }}
+              className={`flex items-center gap-2 px-4 py-2 bg-blue-50 border-2 rounded-xl text-blue-700 hover:bg-blue-100 transition-all shadow-sm font-bold text-xs ${
+                isExportMenuOpen ? 'border-blue-600 ring-2 ring-blue-100' : 'border-black'
+              }`}
+              title="تقارير وطباعة الجداول والمستندات"
+              id="export-reports-dropdown-trigger"
             >
-              <FileText className="w-4 h-4" />
-              <span>نسخة الطلبة (بدون حراس)</span>
+              <Download className="w-4 h-4 text-blue-600" />
+              <span>التقارير والاستخراج</span>
+              {isExportMenuOpen ? <ChevronUp className="w-3.5 h-3.5 opacity-70" /> : <ChevronDown className="w-3.5 h-3.5 opacity-70" />}
+            </button>
+
+            {isExportMenuOpen && (
+              <>
+                <div className="fixed inset-0 z-30" onClick={() => setIsExportMenuOpen(false)} />
+                <div 
+                  className="absolute left-0 mt-2 w-72 bg-white border-2 border-black rounded-2xl shadow-xl z-40 p-2 flex flex-col gap-1.5 text-right font-sans"
+                  style={{ direction: 'rtl' }}
+                >
+                  <button 
+                    onClick={() => {
+                      if (activeTab === 'exams') exportExamPDF();
+                      else if (activeTab === 'personal') exportPersonalInvigilationPDF();
+                      else exportPDF();
+                      setIsExportMenuOpen(false);
+                    }}
+                    className="flex items-center gap-2.5 w-full text-right px-3 py-2 hover:bg-slate-50 text-slate-700 rounded-xl transition-all font-semibold text-xs border border-transparent hover:border-slate-100"
+                  >
+                    <Download className="w-4 h-4 text-slate-400" />
+                    <span>تحميل الجدول الحالي (PDF)</span>
+                  </button>
+
+                  {activeTab === 'exams' && (
+                    <button 
+                      onClick={() => { exportExamPDF(false); setIsExportMenuOpen(false); }}
+                      className="flex items-center gap-2.5 w-full text-right px-3 py-2 hover:bg-slate-50 text-slate-700 rounded-xl transition-all font-semibold text-xs border border-transparent hover:border-slate-100"
+                    >
+                      <FileText className="w-4 h-4 text-slate-400" />
+                      <span>تحميل نسخة الطلبة (بدون حراس)</span>
+                    </button>
+                  )}
+
+                  {/* Admin reports sub section */}
+                  {(isAdmin || isViceAdmin || isSpecialtyManager) && (
+                    <>
+                      <div className="border-t border-slate-100 my-1" />
+                      
+                      <button 
+                        onClick={() => { exportInvigilationStatsExcel(); setIsExportMenuOpen(false); }}
+                        className="flex items-center gap-2.5 w-full text-right px-3 py-2 bg-emerald-50 hover:bg-emerald-105 text-emerald-700 rounded-xl transition-all font-bold text-[11px] border border-emerald-100"
+                      >
+                        <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+                        <span>إحصائيات المراقبة والحراسة (Excel)</span>
+                      </button>
+                      
+                      <button 
+                        onClick={() => { exportAllTeachersWeeklySchedulesPDF(); setIsExportMenuOpen(false); }}
+                        className="flex items-center gap-2.5 w-full text-right px-3 py-2 bg-orange-50 hover:bg-orange-100 text-orange-700 rounded-xl transition-all font-bold text-[11px] border border-orange-100"
+                        title="تحميل الجدول الأسبوعي لجميع الأساتذة في ملف مدمج واحد"
+                      >
+                        <Calendar className="w-4 h-4 text-orange-600" />
+                        <span>تحميل جداول الحصص للأساتذة (PDF)</span>
+                      </button>
+                      
+                      <button 
+                        onClick={() => { exportAllTeachersInvigilationSchedulesPDF(); setIsExportMenuOpen(false); }}
+                        className="flex items-center gap-2.5 w-full text-right px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-xl transition-all font-bold text-[11px] border border-rose-100"
+                        title="تحميل جداول الحراسة لجميع الأساتذة في ملف مدمج واحد"
+                      >
+                        <ShieldAlert className="w-4 h-4 text-rose-600" />
+                        <span>تحميل جداول الحراسة المدمجة (PDF)</span>
+                      </button>
+                    </>
+                  )}
+
+                  {/* Bulk Reports (Specialty specific) */}
+                  {selectedSpecialty && (
+                    <>
+                      <div className="border-t border-slate-100 my-1 font-extrabold pr-2 text-[10px] text-slate-400 uppercase tracking-widest text-right">أوراق التخصص المدمجة</div>
+                      
+                      {activeTab === 'exams' && (
+                        <button 
+                          onClick={() => { setPrintingBulkExamSpecialty(selectedSpecialty); setIsExportMenuOpen(false); }}
+                          className="flex items-center gap-2.5 w-full text-right px-3 py-2 bg-yellow-100 hover:bg-yellow-200 text-yellow-800 rounded-xl transition-all font-bold text-[11px] border-2 border-yellow-300"
+                        >
+                          <FileText className="w-4 h-4 text-yellow-600 animate-pulse" />
+                          <span>تحميل محاضر الامتحان المجمعة للتخصص</span>
+                        </button>
+                      )}
+
+                      {activeTab === 'semester' && (
+                        <button 
+                          onClick={() => { setPrintingBulkAttendanceSpecialty(selectedSpecialty); setIsExportMenuOpen(false); }}
+                          className="flex items-center gap-2.5 w-full text-right px-3 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl transition-all font-bold text-[11px] border-2 border-emerald-600"
+                        >
+                          <FileText className="w-4 h-4 text-white animate-pulse" />
+                          <span>تحميل محاضر حضور TD/TP المجمعة</span>
+                        </button>
+                      )}
+                    </>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* 3. AI Smart Distribute Button */}
+          {(isAdmin || isViceAdmin || isSpecialtyManager) && (
+            <button 
+              onClick={() => {
+                setSmartInvigilators(teachers.filter(t => t.employmentType !== 'temporary').map(t => t.uid)); // Default to non-temporary
+                setShowSmartInvigilationModal(true);
+              }}
+              className="flex items-center gap-2 px-4 py-2 bg-indigo-50 border-2 border-black rounded-xl text-indigo-600 hover:bg-indigo-100 transition-all shadow-sm font-bold text-xs"
+            >
+              <Sparkles className="w-4.5 h-4.5 text-indigo-600" />
+              <span>توزيع ذكي (AI)</span>
             </button>
           )}
+
+          {/* 4. Main Add Custom Session Button */}
           {(isAdmin || isViceAdmin) && (
             <button 
               onClick={() => { 
@@ -2751,7 +2907,7 @@ export default function Schedules() {
                 setFormExamType(selectedExamType === 'All' ? 'Regular' : selectedExamType);
                 setShowAddModal(true); 
               }}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition-all shadow-lg shadow-blue-100"
+              className="flex items-center gap-2 px-4 py-2 bg-blue-600 border-2 border-black text-white rounded-xl hover:bg-blue-700 transition-all shadow-lg font-extrabold text-xs"
             >
               <Plus className="w-4 h-4" />
               <span>إضافة {activeTab === 'exams' ? 'امتحان' : 'حصة'}</span>
@@ -2996,12 +3152,24 @@ export default function Schedules() {
                                     <span className="text-[10px] font-bold uppercase tracking-wider opacity-60">
                                       {session.isReserved ? 'محجوزة' : session.type}
                                     </span>
-                                    {(isAdmin || isViceAdmin) && (
-                                      <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                        <button onClick={() => { setEditingSession(session); setShowAddModal(true); }} className="p-1 hover:bg-white/50 rounded-lg"><Edit2 className="w-3 h-3" /></button>
-                                        <button onClick={() => setSessionToDelete({ id: session.id, type: 'schedule' })} className="p-1 hover:bg-white/50 rounded-lg text-red-600"><Trash2 className="w-3 h-3" /></button>
-                                      </div>
-                                    )}
+                                    <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                      {!session.isReserved && (
+                                        <button 
+                                          onClick={(e) => { e.stopPropagation(); setPrintingSession(session); }} 
+                                          className="p-1 hover:bg-white/50 rounded-lg text-emerald-700 hover:text-emerald-900 bg-emerald-50 border border-emerald-100 shadow-sm"
+                                          title="ورقة حضور الحصة"
+                                          id={`print-attendance-btn-${session.id}`}
+                                        >
+                                          <FileText className="w-3.5 h-3.5" />
+                                        </button>
+                                      )}
+                                      {(isAdmin || isViceAdmin) && (
+                                        <>
+                                          <button onClick={() => { setEditingSession(session); setShowAddModal(true); }} className="p-1 hover:bg-white/50 rounded-lg"><Edit2 className="w-3 h-3" /></button>
+                                          <button onClick={() => setSessionToDelete({ id: session.id, type: 'schedule' })} className="p-1 hover:bg-white/50 rounded-lg text-red-600"><Trash2 className="w-3 h-3" /></button>
+                                        </>
+                                      )}
+                                    </div>
                                   </div>
                                   <div className="font-bold text-sm leading-tight text-center my-1">
                                     {session.isReserved ? (session.reservedFor || 'قسم آخر') : 
@@ -3099,12 +3267,16 @@ export default function Schedules() {
                             title: 'إضافة يوم جديد:',
                             defaultValue: '',
                             type: 'date',
-                            onConfirm: (newDate) => {
+                            onConfirm: async (newDate) => {
                               if (newDate && !isNaN(Date.parse(newDate))) {
-                                setLevelExtraExamDates(prev => ({
-                                  ...prev,
-                                  [selectedLevel]: [...new Set([...(prev[selectedLevel] || []), newDate])].sort()
-                                }));
+                                const typeKey = selectedExamType === 'All' ? 'Regular' : selectedExamType;
+                                const compositeKey = `${selectedLevel}_${selectedSemester}_${typeKey}`;
+                                const newLevelDates = {
+                                  ...levelExtraExamDates,
+                                  [compositeKey]: [...new Set([...(levelExtraExamDates[compositeKey] || []), newDate])].sort()
+                                };
+                                setLevelExtraExamDates(newLevelDates);
+                                await setDoc(doc(db, 'settings', 'examDates'), { levelExtraExamDates: newLevelDates }, { merge: true });
                               }
                             }
                           });
@@ -3197,7 +3369,12 @@ export default function Schedules() {
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   const specsInThisLevel = specialties.filter(s => s.levelId === selectedLevel).map(s => s.id);
-                                  const affectedExams = examSessions.filter(s => s.date === date && specsInThisLevel.includes(s.specialtyId));
+                                  const affectedExams = examSessions.filter(s => 
+                                    s.date === date && 
+                                    s.semester === selectedSemester &&
+                                    (selectedExamType === 'All' ? true : s.type === selectedExamType) &&
+                                    specsInThisLevel.includes(s.specialtyId)
+                                  );
                                   
                                   setConfirmState({
                                     show: true,
@@ -3260,7 +3437,12 @@ export default function Schedules() {
                                     onConfirm: async (newDate) => {
                                       if (newDate && !isNaN(Date.parse(newDate)) && newDate !== date) {
                                         const specsInThisLevel = specialties.filter(s => s.levelId === selectedLevel).map(s => s.id);
-                                        const examsToUpdate = examSessions.filter(s => s.date === date && specsInThisLevel.includes(s.specialtyId));
+                                        const examsToUpdate = examSessions.filter(s => 
+                                          s.date === date && 
+                                          s.semester === selectedSemester &&
+                                          (selectedExamType === 'All' ? true : s.type === selectedExamType) &&
+                                          specsInThisLevel.includes(s.specialtyId)
+                                        );
                                         
                                         const toastId = toast.loading('جاري تحديث التاريخ...');
                                         try {
@@ -3497,6 +3679,19 @@ export default function Schedules() {
                                           <button 
                                             onClick={(e) => {
                                               e.stopPropagation();
+                                              setPrintingExam(exam);
+                                            }}
+                                            className="p-[3px] px-2 text-yellow-700 hover:bg-yellow-50 border border-yellow-200 bg-yellow-50/40 rounded-xl transition-colors flex items-center gap-1 shadow-sm"
+                                            title="طباعة محضر الامتحان"
+                                            id={`print-minutes-btn-${exam.id}`}
+                                          >
+                                            <FileText className="w-3.5 h-3.5" />
+                                            <span className="text-[10px] font-bold">محضر الامتحان</span>
+                                          </button>
+
+                                          <button 
+                                            onClick={(e) => {
+                                              e.stopPropagation();
                                               const spec = resolveSpecialty(exam.specialtyId);
                                               setConfirmState({
                                                 show: true,
@@ -3511,7 +3706,8 @@ export default function Schedules() {
                                                     exam.roomAssignments || [],
                                                     'specialty',
                                                     undefined, // Don't update invigilators
-                                                    exam.studentCount || 0
+                                                    exam.studentCount || 0,
+                                                    true
                                                   );
                                                   setConfirmState(prev => ({ ...prev, show: false }));
                                                 }
@@ -4286,7 +4482,7 @@ export default function Schedules() {
                               );
                               if (specExams.length > 0) setExamTime(specExams[0].time);
                               else {
-                                const dateExams = examSessions.filter(s => s.date === examDate && s.type === formExamType);
+                                const dateExams = examSessions.filter(s => s.date === examDate && s.semester === selectedSemester && s.type === formExamType);
                                 if (dateExams.length > 0) setExamTime(dateExams[0].time);
                               }
                             }
@@ -5107,6 +5303,75 @@ export default function Schedules() {
             </div>
           </div>
         </div>
+      )}
+
+      {printingExam && (
+        <ExamMinutesModal 
+          exam={printingExam}
+          onClose={() => setPrintingExam(null)}
+          modules={modules}
+          specialties={specialties}
+          levels={levels}
+          cycles={cycles}
+          rooms={rooms}
+          teachers={teachers}
+          students={students}
+          scheduleSessions={scheduleSessions}
+          selectedSemester={selectedSemester}
+          selectedYear={selectedYear}
+        />
+      )}
+
+      {printingSession && (
+        <SessionAttendanceModal 
+          session={printingSession}
+          onClose={() => setPrintingSession(null)}
+          modules={modules}
+          specialties={specialties}
+          levels={levels}
+          cycles={cycles}
+          rooms={rooms}
+          teachers={teachers}
+          students={students}
+          selectedSemester={selectedSemester}
+          selectedYear={selectedYear}
+        />
+      )}
+
+      {printingBulkExamSpecialty && (
+        <BulkExamMinutesModal 
+          specialtyId={printingBulkExamSpecialty}
+          onClose={() => setPrintingBulkExamSpecialty(null)}
+          modules={modules}
+          specialties={specialties}
+          levels={levels}
+          cycles={cycles}
+          rooms={rooms}
+          teachers={teachers}
+          students={students}
+          scheduleSessions={scheduleSessions}
+          examSessions={examSessions}
+          selectedSemester={selectedSemester}
+          selectedYear={selectedYear}
+          selectedExamType={selectedExamType}
+        />
+      )}
+
+      {printingBulkAttendanceSpecialty && (
+        <BulkSessionAttendanceModal 
+          specialtyId={printingBulkAttendanceSpecialty}
+          onClose={() => setPrintingBulkAttendanceSpecialty(null)}
+          modules={modules}
+          specialties={specialties}
+          levels={levels}
+          cycles={cycles}
+          rooms={rooms}
+          teachers={teachers}
+          students={students}
+          scheduleSessions={scheduleSessions}
+          selectedSemester={selectedSemester}
+          selectedYear={selectedYear}
+        />
       )}
   </div>
 );
